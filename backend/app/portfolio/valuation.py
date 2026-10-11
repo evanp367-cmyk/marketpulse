@@ -95,7 +95,7 @@ def build_portfolio_response(positions: list[dict[str, Any]], prices: dict[str, 
     for quote, group in sorted(grouped.items()):
         totals.append({
             "quote_asset": quote,
-            "market_value": format(group["market_value"], "f"),
+            "market_value": format(group["market_value"], "f") if group["priced_positions"] else None,
             "cost_basis": format(group["cost_basis"], "f") if group["positions_with_entry_price"] else None,
             "unrealized_pnl": format(group["unrealized_pnl"], "f") if group["positions_with_pnl"] else None,
             "priced_positions": group["priced_positions"],

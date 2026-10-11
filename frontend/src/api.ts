@@ -145,7 +145,7 @@ export type PortfolioPosition = {
 
 export type PortfolioTotal = {
   quote_asset: string;
-  market_value: string;
+  market_value: string | null;
   cost_basis: string | null;
   unrealized_pnl: string | null;
   priced_positions: number;

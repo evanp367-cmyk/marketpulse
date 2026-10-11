@@ -30,6 +30,7 @@ async def current_user(x_telegram_init_data: str | None = Header(default=None), 
     from backend.app.db.session import SessionLocal
     from backend.app.models.models import User
     from sqlalchemy import select
+    from sqlalchemy.exc import IntegrityError
     if settings.environment == "development" and settings.dev_auth_enabled and x_dev_user == "local-dev":
         telegram_id="dev-local-user"
     else:
@@ -42,6 +43,17 @@ async def current_user(x_telegram_init_data: str | None = Header(default=None), 
     async with SessionLocal() as session:
         result=await session.execute(select(User).where(User.telegram_id==telegram_id)); user=result.scalar_one_or_none()
         if user is None:
-            user=User(telegram_id=telegram_id);session.add(user);await session.commit();await session.refresh(user)
+            user = User(telegram_id=telegram_id)
+            session.add(user)
+            try:
+                await session.commit()
+            except IntegrityError:
+                # Parallel first requests may create the same Telegram user.
+                await session.rollback()
+                user = await session.scalar(select(User).where(User.telegram_id == telegram_id))
+                if user is None:
+                    raise
+            else:
+                await session.refresh(user)
         # Detach for safe use after session closes; fields needed by routes are scalar.
         return user

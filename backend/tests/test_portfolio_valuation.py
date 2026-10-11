@@ -68,6 +68,31 @@ def test_no_float_arithmetic_in_summary():
     assert response["items"][0]["unrealized_pnl"] == "0.1"
 
 
+def test_missing_prices_do_not_turn_total_value_into_zero():
+    response = build_portfolio_response(
+        [{"id": 1, "symbol": "BTCUSDT", "quantity": "0.1", "average_entry_price": "50000"}],
+        {}, None,
+    )
+    total = response["totals_by_quote_asset"][0]
+    assert total["market_value"] is None
+    assert total["unrealized_pnl"] is None
+    assert total["cost_basis"] == "5000.0"
+    assert total["unpriced_positions"] == 1
+
+
+def test_partial_valuation_preserves_known_value_and_missing_count():
+    response = build_portfolio_response(
+        [
+            {"id": 1, "symbol": "BTCUSDT", "quantity": "0.1", "average_entry_price": "50000"},
+            {"id": 2, "symbol": "ETHUSDT", "quantity": "1", "average_entry_price": "2000"},
+        ],
+        {"BTCUSDT": "60000"}, None,
+    )
+    total = response["totals_by_quote_asset"][0]
+    assert total["market_value"] == "6000.0"
+    assert total["priced_positions"] == total["unpriced_positions"] == 1
+
+
 import json
 import pytest
 from backend.app.providers.binance import BinancePublicProvider
