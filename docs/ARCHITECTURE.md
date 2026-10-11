@@ -1,0 +1,10 @@
+# Architecture
+
+- **Frontend:** React + TypeScript + Vite; API access through a small typed client; Lightweight Charts is selected under Apache-2.0 and requires TradingView attribution.
+- **Backend:** FastAPI, SQLAlchemy 2 async sessions, Pydantic Settings. Business logic is separated into provider and indicator modules.
+- **Storage:** SQLite via aiosqlite for local onboarding; PostgreSQL via asyncpg by changing `DATABASE_URL`. Initial schema creation is currently metadata-based for easy first run; Alembic is included as a dependency but migrations still need to be authored before production.
+- **Market data:** Binance public market-data REST endpoints for crypto. Frankfurter v2 for daily global cross-currency reference rates and Bank of Russia `XML_daily.asp` for official daily RUB reference rates. Sources are kept separate, with source/date/rate type visible. Neither is real-time executable Forex. Neither public API availability nor a documented endpoint alone confirms commercial redistribution rights; review applicable terms before launch.
+- **Authentication:** Telegram Mini App raw `initData` is verified server-side using the bot token and HMAC algorithm. Local browser dev auth is explicitly gated by `ENVIRONMENT=development` and `DEV_AUTH_ENABLED=true`; never enable it in production.
+- **Scale path:** Move persistence to PostgreSQL; add a dedicated shared market stream worker and broker/queue only after measured need. Current endpoint polling is intentionally a local MVP, not a multi-thousand-user architecture.
+
+- **Portfolio valuation (0.3.0):** manual position records are valued using the latest spot last-price lookup from Binance. The backend uses `Decimal` for quantity × price calculations, reports missing prices as unavailable rather than zero, and aggregates totals by quote asset so unlike currencies are never combined. Only unrealized P/L is calculated when the user supplies an average entry price; realized P/L, fees, and transaction-ledger accounting are out of scope for this milestone.
