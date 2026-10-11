@@ -3,6 +3,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.exc import IntegrityError
 from pydantic import BaseModel, Field
 from decimal import Decimal
 from backend.app.core.config import settings, production_config_errors
@@ -171,7 +172,16 @@ async def _get_subscription(session: AsyncSession, user: User):
     sub = await session.scalar(select(Subscription).where(Subscription.user_id == user.id))
     if sub is None:
         sub = Subscription(user_id=user.id, plan_code="free", status="active", provider="none")
-        session.add(sub); await session.commit(); await session.refresh(sub)
+        session.add(sub)
+        try:
+            await session.commit()
+        except IntegrityError:
+            await session.rollback()
+            sub = await session.scalar(select(Subscription).where(Subscription.user_id == user.id))
+            if sub is None:
+                raise
+        else:
+            await session.refresh(sub)
     end = sub.ends_at.replace(tzinfo=timezone.utc) if sub.ends_at and sub.ends_at.tzinfo is None else sub.ends_at
     if sub.plan_code == "pro" and end and end <= datetime.now(timezone.utc):
         sub.plan_code = "free"; sub.status = "expired"; await session.commit()
@@ -191,7 +201,8 @@ async def create_pro_invoice(user: User = Depends(current_user), session: AsyncS
     if settings.telegram_pro_price_stars < 1:
         raise HTTPException(503, detail="TELEGRAM_PRO_PRICE_STARS must be a positive integer")
     payload = f"marketpulse_pro_month_{user.telegram_id}_{uuid.uuid4().hex}"
-    body = {"title":"MarketPulse Pro · 30 days", "description":"Pro tools for market research. No guaranteed returns.", "payload":payload, "provider_token":"", "currency":"XTR", "prices":[{"label":"MarketPulse Pro · 30 days", "amount":settings.telegram_pro_price_stars}], "subscription_period":2592000}
+    # A single payment grants 30 days. Recurring billing requires separate consent.
+    body = {"title":"MarketPulse Pro · 30 days", "description":"Pro tools for market research. No guaranteed returns.", "payload":payload, "provider_token":"", "currency":"XTR", "prices":[{"label":"MarketPulse Pro · 30 days", "amount":settings.telegram_pro_price_stars}]}
     async with httpx.AsyncClient(timeout=10) as client:
         try:
             response = await client.post(f"https://api.telegram.org/bot{settings.telegram_bot_token}/createInvoiceLink", json=body)

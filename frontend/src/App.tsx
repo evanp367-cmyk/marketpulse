@@ -601,8 +601,10 @@ export default function App() {
           <>
             <header className="topbar"><div><div className="eyebrow">THIRD-PARTY RSS · ORIGINAL SOURCES</div><h1>{lang === 'ru' ? 'Криптоновости' : 'Crypto news'}<span className="dot-live" /></h1><p>{lang === 'ru' ? 'Заголовки с переходом к оригинальной публикации' : 'Headlines linked to original publishers'}</p></div><button className="refresh" onClick={() => void loadNews()} disabled={newsBusy}><RefreshCw size={16} className={newsBusy ? 'spin' : ''}/>{lang === 'ru' ? 'Обновить' : 'Refresh'}</button></header>
             {newsError && <div className="error-banner">{newsError}</div>}{newsData && <div className="plan-note">{lang === 'ru' ? `Тариф ${newsData.plan.toUpperCase()} · доступно заголовков: ${newsData.limit}` : `Plan ${newsData.plan.toUpperCase()} · headlines available: ${newsData.limit}`}</div>}
+            {newsData?.warnings?.length > 0 && <div className="stale-banner" role="status">{lang === 'ru' ? 'Часть источников новостей недоступна. Попробуйте обновить позже.' : 'Some news sources are unavailable. Try refreshing later.'}</div>}
             <section className="news-grid">{newsData?.items?.map((item: any, i: number) => <article className="panel news-card" key={item.url}><div className="news-card-top"><span>{item.publisher}</span><span>#{String(i+1).padStart(2,'0')}</span></div><h2>{item.title}</h2>{item.published_at && <small>{item.published_at}</small>}<a href={item.url} target="_blank" rel="noreferrer">{lang === 'ru' ? 'Читать у источника' : 'Read at source'} ↗</a></article>)}</section>
             {!newsData && !newsError && <div className="empty panel">{newsBusy ? t.loading : (lang === 'ru' ? 'Загрузка новостей…' : 'Loading news…')}</div>}
+            {newsData && !newsBusy && !newsError && !newsData.items?.length && <div className="empty panel">{lang === 'ru' ? 'Нет доступных новостей. Новые заголовки появятся после успешного обновления источников.' : 'No news is available. Headlines will appear after the sources refresh successfully.'}</div>}
             <div className="disclaimer"><Settings size={15}/><span>{lang === 'ru' ? (newsData?.disclaimer || 'Новости предоставляются сторонними издателями. Проверяй лицензии источников перед коммерческим использованием.') : 'News are provided by third-party publishers. Check source licensing before commercial use. Not investment advice.'}</span></div>
           </>
         ) : page === 'plans' ? (
@@ -763,6 +765,7 @@ export default function App() {
                   <span>{t.portfolioValue} · {total.quote_asset}</span>
                   <strong>{formatAmount(total.market_value)} <em>{total.quote_asset}</em></strong>
                   <small>{t.portfolioTotals} · {total.priced_positions} / {(portfolioData?.items ?? []).filter(item => item.quote_asset === total.quote_asset).length}</small>
+                  {total.unpriced_positions > 0 && <small>{lang === 'ru' ? (total.priced_positions ? 'Оценка неполная: часть котировок недоступна.' : 'Оценка недоступна: нет актуальных котировок.') : (total.priced_positions ? 'Partial valuation: some quotes are unavailable.' : 'Valuation unavailable: no current quotes.')}</small>}
                   {(total.cost_basis !== null || total.unrealized_pnl !== null) && <div className="portfolio-total-details">
                     {total.cost_basis !== null && <span>{t.portfolioCost}: {formatAmount(total.cost_basis)} {total.quote_asset}</span>}
                     {total.unrealized_pnl !== null && <span className={Number(total.unrealized_pnl) >= 0 ? 'positive' : 'negative'}>{t.portfolioPnl}: {Number(total.unrealized_pnl) > 0 ? '+' : ''}{formatAmount(total.unrealized_pnl)} {total.quote_asset}</span>}
