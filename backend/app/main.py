@@ -27,6 +27,7 @@ async def lifespan(app: FastAPI):
         raise RuntimeError("Invalid production configuration: " + "; ".join(_production_errors))
     async with engine.begin() as conn: await conn.run_sync(Base.metadata.create_all)
     yield
+    await provider.aclose()
     await engine.dispose()
 app=FastAPI(title=settings.app_name,version="0.4.9",lifespan=lifespan)
 # Vite may be opened as either localhost or 127.0.0.1. Browsers treat these
