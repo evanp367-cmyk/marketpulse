@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { createPortal } from 'react-dom';
 import {
   Activity,
@@ -22,11 +22,26 @@ import {
   X,
 } from 'lucide-react';
 import { api, type Ticker, type Candle, type OfficialFxResponse, type WorldFxResponse, type FxCurrency, type FxCurrencyCatalog, type FxConversionResponse, type PortfolioResponse } from './api';
-import Chart from './Chart';
 import Alerts from './Alerts';
 import Navigation, { type Page } from './Navigation';
 import useUnreadAlerts from './useUnreadAlerts';
 import { ChartSkeleton, MarketSkeleton } from './LoadingState';
+
+const Chart = lazy(() => import('./Chart'));
+const TICKER_CACHE_KEY = 'marketpulse-tickers-v1';
+function readCache<T>(key: string, maxAgeMs: number): { savedAt: number; items: T[] } | null {
+  try {
+    const raw = sessionStorage.getItem(key);
+    if (!raw) return null;
+    const value = JSON.parse(raw);
+    if (!Number.isFinite(value.savedAt) || value.savedAt > Date.now() || Date.now() - value.savedAt > maxAgeMs
+      || !Array.isArray(value.items) || value.items.length > 10000) return null;
+    return value;
+  } catch { return null; }
+}
+function saveCache<T>(key: string, items: T[]) {
+  try { sessionStorage.setItem(key, JSON.stringify({ savedAt: Date.now(), items })); } catch { /* Storage is optional. */ }
+}
 
 type Lang = 'ru' | 'en';
 type FxMode = 'world' | 'cbr';
@@ -176,9 +191,13 @@ export default function App() {
   const [page, setPage] = useState<Page>(pageFromLocation);
   const { unreadCount, markSeen } = useUnreadAlerts(page === 'alerts');
   const [onlyFavorites, setOnlyFavorites] = useState(false);
-  const [tickers, setTickers] = useState<Ticker[]>([]);
+  const initialTickerCache = useMemo(() => readCache<Ticker>(TICKER_CACHE_KEY, 5 * 60_000), []);
+  const tickerCache = useRef(initialTickerCache);
+  const [tickers, setTickers] = useState<Ticker[]>(initialTickerCache?.items ?? []);
+  const [tickersFromCache, setTickersFromCache] = useState(Boolean(initialTickerCache));
+  const [marketNow, setMarketNow] = useState(Date.now());
   const [featuredTicker, setFeaturedTicker] = useState<Ticker | null>(null);
-  const [candles, setCandles] = useState<Candle[]>([]);
+  const [candles, setCandles] = useState<Candle[]>(() => readCache<Candle>('marketpulse-candles-BTCUSDT-v1', 10 * 60_000)?.items ?? []);
   const [selected, setSelected] = useState('BTCUSDT');
   const [search, setSearch] = useState('');
   const [favorites, setFavorites] = useState<string[]>([]);
@@ -262,7 +281,8 @@ export default function App() {
     });
   }, [worldFx, worldCurrencySearch, worldCurrencies]);
 
-  async function loadTickers() {
+  async function loadTickers(force = false) {
+    if (!force && tickerCache.current && Date.now() - tickerCache.current.savedAt < 15_000) return;
     setTickersBusy(true);
     setError('');
     setMarketDataError('');
@@ -270,6 +290,9 @@ export default function App() {
       const response = await api<{ items: Ticker[] }>('/api/market/tickers');
       if (!Array.isArray(response.items) || response.items.length === 0) throw new Error('Market API returned no ticker data');
       setTickers(response.items);
+      setTickersFromCache(false);
+      tickerCache.current = { savedAt: Date.now(), items: response.items };
+      saveCache(TICKER_CACHE_KEY, response.items);
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       setMarketDataError(message);
@@ -279,22 +302,31 @@ export default function App() {
     }
   }
 
-  async function loadCandles(symbol: string) {
+  async function loadCandles(symbol: string, force = false) {
     chartRequest.current?.abort();
+    const cacheKey = `marketpulse-candles-${symbol}-v1`;
+    const cached = readCache<Candle>(cacheKey, 10 * 60_000);
+    if (!force && cached && Date.now() - cached.savedAt < 60_000) {
+      setCandles(cached.items);
+      setChartBusy(false);
+      setChartError('');
+      return;
+    }
     const controller = new AbortController();
     chartRequest.current = controller;
     setChartBusy(true);
     setChartError('');
-    setCandles([]);
+    setCandles(cached?.items ?? []);
     try {
       const candleResponse = await api<{ items: Candle[] }>(`/api/market/klines?symbol=${encodeURIComponent(symbol)}&interval=1h&limit=180`, { signal: controller.signal });
       if (controller.signal.aborted) return;
       if (!Array.isArray(candleResponse.items)) throw new Error('Market API returned invalid candle data');
       setCandles(candleResponse.items);
+      saveCache(cacheKey, candleResponse.items);
     } catch (e) {
       if (controller.signal.aborted) return;
       const message = e instanceof Error ? e.message : String(e);
-      setCandles([]);
+      if (!cached) setCandles([]);
       setChartError(message);
     } finally {
       if (chartRequest.current === controller) {
@@ -304,8 +336,12 @@ export default function App() {
     }
   }
 
-  async function loadFeaturedTicker(symbol: string) {
+  async function loadFeaturedTicker(symbol: string, force = false) {
     featuredRequest.current?.abort();
+    if (!force && tickerCache.current && Date.now() - tickerCache.current.savedAt < 15_000) {
+      setFeaturedTicker(tickerCache.current.items.find(item => item.symbol === symbol) ?? null);
+      return;
+    }
     const controller = new AbortController();
     featuredRequest.current = controller;
     try {
@@ -319,7 +355,7 @@ export default function App() {
   }
 
   async function load() {
-    await Promise.all([loadTickers(), loadCandles(selected), loadFeaturedTicker(selected)]);
+    await Promise.all([loadTickers(true), loadCandles(selected, true), loadFeaturedTicker(selected, true)]);
   }
 
   async function loadCurrencyCatalog() {
@@ -596,6 +632,16 @@ export default function App() {
   }, [page, selected, signalInterval]);
 
   useEffect(() => {
+    if (page !== 'terminal' && page !== 'markets') return;
+    const updatedAt = tickers[0]?.updated_at;
+    if (!updatedAt) return;
+    const remaining = 30_000 - (Date.now() - Date.parse(updatedAt));
+    if (!Number.isFinite(remaining) || remaining <= 0) return;
+    const timer = window.setTimeout(() => setMarketNow(Date.now()), remaining + 100);
+    return () => window.clearTimeout(timer);
+  }, [page, tickers]);
+
+  useEffect(() => {
     if (page === 'news') void loadNews();
     if (page === 'plans') void loadPlans();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -620,6 +666,8 @@ export default function App() {
     .sort((a, b) => Number(favorites.includes(b.symbol)) - Number(favorites.includes(a.symbol)))
     .slice(0, 80), [tickers, search, favorites, onlyFavorites]);
   const current = featuredTicker?.symbol === selected ? featuredTicker : tickers.find(item => item.symbol === selected);
+  const marketSnapshotAt = tickers[0]?.updated_at;
+  const marketSnapshotAge = marketSnapshotAt ? Math.max(0, (marketNow - Date.parse(marketSnapshotAt)) / 1000) : 0;
   const portfolioSuggestions = useMemo(() => {
     const query = positionSearch.trim().toLocaleLowerCase();
     const quoteRank = (quote: string) => {
@@ -968,6 +1016,7 @@ export default function App() {
               <button className="refresh" onClick={() => void load()} disabled={busy}><RefreshCw size={16} className={busy ? 'spin' : ''} />{busy ? '…' : t.retry}</button>
             </header>
             {error && <div className="error-banner"><span>{error}</span><button onClick={() => setError('')}>×</button></div>}
+            {(tickersFromCache || marketSnapshotAge > 30) && tickers.length > 0 && <div className="stale-banner" role="status">{lang === 'ru' ? 'Показан сохранённый снимок Binance Spot' : 'Showing a saved Binance Spot snapshot'}{marketSnapshotAt ? ` · ${new Date(marketSnapshotAt).toLocaleTimeString(lang === 'ru' ? 'ru-RU' : 'en-US')}` : ''}. {tickersBusy ? (lang === 'ru' ? 'Обновляем…' : 'Refreshing…') : (lang === 'ru' ? 'Для новых цен нажмите «Обновить».' : 'Tap Refresh for new prices.')}</div>}
             {page === 'terminal' && <div className="metrics">
               <div className="metric"><span>{lang === 'ru' ? 'Торговые пары' : 'Trading pairs'}</span><strong>{tickersBusy && !tickers.length ? '…' : tickers.length.toLocaleString()}</strong><small>Binance Spot</small></div>
               <div className="metric"><span>{lang === 'ru' ? 'Выбранный актив' : 'Selected asset'}</span><strong>{splitTradingPair(selected).base}<em>/ {splitTradingPair(selected).quote}</em></strong><small>{current ? `${t.price} · ${Number(current.price).toLocaleString(undefined, { maximumFractionDigits: 6 })}` : t.loading}</small></div>
@@ -977,7 +1026,8 @@ export default function App() {
               {page === 'terminal' && <section className="panel chart-panel">
                 <div className="panel-head"><div><span className="eyebrow">{lang === 'ru' ? 'Динамика цены' : 'Price overview'}</span><h2>{splitTradingPair(selected).base} <span className="pair">/ {splitTradingPair(selected).quote}</span></h2></div><div className="price-block"><strong>{current ? Number(current.price).toLocaleString(undefined, { maximumFractionDigits: 8 }) : '—'}</strong><span className={current && Number(current.change_percent) >= 0 ? 'positive' : 'negative'}>{current ? `${Number(current.change_percent) > 0 ? '+' : ''}${Number(current.change_percent).toFixed(2)}%` : ''}</span></div></div>
                 <div className="chart-tools"><span>{t.chart} · 1H</span><span className="source-label">● {t.source}: Binance</span></div>
-                {candles.length ? <Chart candles={candles} dark={dark} /> : chartBusy ? <ChartSkeleton label={t.loading} /> : <div className="chart-empty">{chartError || error || t.noData}</div>}
+                {chartError && candles.length > 0 && <div className="stale-banner" role="status">{lang === 'ru' ? 'Новые свечи недоступны; показан сохранённый график.' : 'New candles are unavailable; showing a saved chart.'}</div>}
+                {candles.length ? <Suspense fallback={<ChartSkeleton label={t.loading} />}><Chart candles={candles} dark={dark} /></Suspense> : chartBusy ? <ChartSkeleton label={t.loading} /> : <div className="chart-empty">{chartError || error || t.noData}</div>}
                 <div className="chart-foot"><span>● {t.source}: Binance Spot</span><span>{candles.length ? new Date(candles[candles.length - 1].time * 1000).toLocaleString() : ''}</span></div>
               </section>}
               <section className="panel watch-panel" id="markets">
