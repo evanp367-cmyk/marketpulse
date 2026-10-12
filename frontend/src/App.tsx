@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { createPortal } from 'react-dom';
 import {
   Activity,
@@ -169,7 +169,10 @@ export default function App() {
   const [error, setError] = useState('');
   const [marketDataError, setMarketDataError] = useState('');
   const [chartError, setChartError] = useState('');
-  const [busy, setBusy] = useState(false);
+  const [tickersBusy, setTickersBusy] = useState(false);
+  const [chartBusy, setChartBusy] = useState(false);
+  const busy = tickersBusy || chartBusy;
+  const chartRequest = useRef<AbortController | null>(null);
   const [fx, setFx] = useState<OfficialFxResponse | null>(null);
   const [fxError, setFxError] = useState('');
   const [fxBusy, setFxBusy] = useState(false);
@@ -240,34 +243,50 @@ export default function App() {
     });
   }, [worldFx, worldCurrencySearch, worldCurrencies]);
 
-  async function load() {
-    setBusy(true);
+  async function loadTickers() {
+    setTickersBusy(true);
     setError('');
     setMarketDataError('');
-    setChartError('');
-    let tickersLoaded = false;
     try {
       const response = await api<{ items: Ticker[] }>('/api/market/tickers');
       if (!Array.isArray(response.items) || response.items.length === 0) throw new Error('Market API returned no ticker data');
       setTickers(response.items);
-      tickersLoaded = true;
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       setMarketDataError(message);
       setError(message);
+    } finally {
+      setTickersBusy(false);
     }
+  }
+
+  async function loadCandles(symbol: string) {
+    chartRequest.current?.abort();
+    const controller = new AbortController();
+    chartRequest.current = controller;
+    setChartBusy(true);
+    setChartError('');
+    setCandles([]);
     try {
-      const candleResponse = await api<{ items: Candle[] }>(`/api/market/klines?symbol=${encodeURIComponent(selected)}&interval=1h&limit=180`);
+      const candleResponse = await api<{ items: Candle[] }>(`/api/market/klines?symbol=${encodeURIComponent(symbol)}&interval=1h&limit=180`, { signal: controller.signal });
+      if (controller.signal.aborted) return;
       if (!Array.isArray(candleResponse.items)) throw new Error('Market API returned invalid candle data');
       setCandles(candleResponse.items);
     } catch (e) {
+      if (controller.signal.aborted) return;
       const message = e instanceof Error ? e.message : String(e);
       setCandles([]);
       setChartError(message);
-      if (!tickersLoaded) setError(message);
     } finally {
-      setBusy(false);
+      if (chartRequest.current === controller) {
+        chartRequest.current = null;
+        setChartBusy(false);
+      }
     }
+  }
+
+  async function load() {
+    await Promise.all([loadTickers(), loadCandles(selected)]);
   }
 
   async function loadCurrencyCatalog() {
@@ -481,8 +500,17 @@ export default function App() {
   useEffect(() => {
     window.Telegram?.WebApp?.ready?.();
     window.Telegram?.WebApp?.expand?.();
-    void load();
-    // selected is intentionally included so changing a crypto instrument refreshes its candles.
+    void loadTickers();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    void loadCandles(selected);
+    return () => {
+      chartRequest.current?.abort();
+      chartRequest.current = null;
+    };
+    // Changing the instrument refreshes only its candles, not the full ticker list.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected]);
 
@@ -866,7 +894,7 @@ export default function App() {
               <section className="panel chart-panel">
                 <div className="panel-head"><div><span className="eyebrow">MARKET OVERVIEW</span><h2>{selected.replace('USDT', '')} <span className="pair">/ USDT</span></h2></div><div className="price-block"><strong>{current ? Number(current.price).toLocaleString(undefined, { maximumFractionDigits: 8 }) : '—'}</strong><span className={current && Number(current.change_percent) >= 0 ? 'positive' : 'negative'}>{current ? `${Number(current.change_percent) > 0 ? '+' : ''}${Number(current.change_percent).toFixed(2)}%` : ''}</span></div></div>
                 <div className="chart-tools"><span>{t.chart} · 1H</span><span className="source-label">● {t.source}: Binance</span></div>
-                {candles.length ? <Chart candles={candles} dark={dark} /> : <div className="chart-empty">{busy ? t.loading : chartError || error || t.noData}</div>}
+                {candles.length ? <Chart candles={candles} dark={dark} /> : <div className="chart-empty">{chartBusy ? t.loading : chartError || error || t.noData}</div>}
                 <div className="chart-foot"><span>● {t.source}: Binance Spot</span><span>{candles.length ? new Date(candles[candles.length - 1].time * 1000).toLocaleString() : ''}</span></div>
               </section>
               <section className="panel watch-panel" id="markets">
@@ -880,7 +908,7 @@ export default function App() {
                     <span className={Number(item.change_percent) >= 0 ? 'positive' : 'negative'}>{Number(item.change_percent) > 0 ? '+' : ''}{Number(item.change_percent).toFixed(2)}%</span>
                     <button className={`fav ${favorites.includes(item.symbol) ? 'on' : ''}`} title={favorites.includes(item.symbol) ? t.remove : t.add} onClick={() => void toggle(item.symbol)}><Star size={15} fill={favorites.includes(item.symbol) ? 'currentColor' : 'none'} /></button>
                   </div>)}
-                  {!filtered.length && !error && <div className="empty">{busy ? t.loading : t.noData}</div>}
+                  {!filtered.length && !error && <div className="empty">{tickersBusy ? t.loading : t.noData}</div>}
                   {error && !tickers.length && <div className="empty"><p>{t.error}</p><button onClick={() => void load()}>{t.retry}</button></div>}
                 </div>
               </section>
