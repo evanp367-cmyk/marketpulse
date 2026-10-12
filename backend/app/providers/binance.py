@@ -10,9 +10,15 @@ class BinancePublicProvider:
     async def _get(self, path: str, params: dict | None = None):
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
-                response = await client.get(f"{self.base}{path}", params=params)
-                response.raise_for_status()
-                return response.json()
+                for attempt in range(2):
+                    try:
+                        response = await client.get(f"{self.base}{path}", params=params)
+                    except (httpx.ConnectError, httpx.ConnectTimeout):
+                        if attempt == 0:
+                            continue
+                        raise
+                    response.raise_for_status()
+                    return response.json()
         except (httpx.HTTPError, ValueError) as exc:
             raise MarketDataError(f"Binance market data unavailable: {type(exc).__name__}") from exc
     async def ticker_24h(self, symbols: list[str] | None = None):

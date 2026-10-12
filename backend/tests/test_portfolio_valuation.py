@@ -96,6 +96,8 @@ def test_partial_valuation_preserves_known_value_and_missing_count():
 import json
 import pytest
 from backend.app.providers.binance import BinancePublicProvider
+from backend.app.providers.binance import MarketDataError
+import httpx
 
 
 @pytest.mark.asyncio
@@ -142,6 +144,45 @@ async def test_ticker_24h_empty_filter_does_not_return_entire_market(monkeypatch
 
     monkeypatch.setattr(provider, "_get", fake_get)
     assert await provider.ticker_24h([""]) == []
+
+
+@pytest.mark.asyncio
+async def test_binance_retries_a_transient_connection_timeout(monkeypatch):
+    provider = BinancePublicProvider()
+    original_client = httpx.AsyncClient
+    calls = 0
+
+    def responder(request):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise httpx.ConnectTimeout("temporary network failure", request=request)
+        return httpx.Response(200, json={"ok": True})
+
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: original_client(
+        transport=httpx.MockTransport(responder), **kwargs,
+    ))
+    assert await provider._get("/api/v3/ping") == {"ok": True}
+    assert calls == 2
+
+
+@pytest.mark.asyncio
+async def test_binance_reports_connection_timeout_after_retry(monkeypatch):
+    provider = BinancePublicProvider()
+    original_client = httpx.AsyncClient
+    calls = 0
+
+    def responder(request):
+        nonlocal calls
+        calls += 1
+        raise httpx.ConnectTimeout("network still unavailable", request=request)
+
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: original_client(
+        transport=httpx.MockTransport(responder), **kwargs,
+    ))
+    with pytest.raises(MarketDataError, match="ConnectTimeout"):
+        await provider._get("/api/v3/ping")
+    assert calls == 2
 
 
 @pytest.mark.asyncio
