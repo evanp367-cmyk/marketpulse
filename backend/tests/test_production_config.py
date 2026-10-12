@@ -47,6 +47,16 @@ def test_production_obeys_telegram_star_limit():
     assert any("10000-Star" in error for error in errors)
 
 
+def test_production_accepts_socks_proxy_and_rejects_malformed_proxy():
+    assert production_config_errors(production_settings(
+        telegram_proxy_url="socks5://user:pass@proxy.example:1080",
+    )) == []
+    errors = production_config_errors(production_settings(
+        telegram_proxy_url="socks5://proxy.example:not-a-port",
+    ))
+    assert any("TELEGRAM_PROXY_URL" in error for error in errors)
+
+
 def test_production_guard_is_not_applied_to_local_development():
     local = Settings(environment="development", database_url="sqlite+aiosqlite:///./marketpulse.db")
     assert production_config_errors(local) == []

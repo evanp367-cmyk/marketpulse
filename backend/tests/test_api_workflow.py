@@ -28,6 +28,7 @@ async def client(tmp_path, monkeypatch):
     monkeypatch.setattr(api_module.settings, "environment", "development")
     monkeypatch.setattr(api_module.settings, "dev_auth_enabled", True)
     monkeypatch.setattr(api_module.settings, "telegram_bot_token", "123:test-only-token")
+    monkeypatch.setattr(api_module.settings, "telegram_proxy_url", "")
     monkeypatch.setattr(api_module.settings, "telegram_pro_price_stars", 250)
 
     async def session_dependency():
@@ -139,3 +140,25 @@ async def test_development_user_cannot_start_payment(client):
     http, _ = client
     response = await http.post("/api/subscription/pro/invoice", headers={"X-Dev-User": "local-dev"})
     assert response.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_invoice_uses_configured_telegram_proxy(client, monkeypatch):
+    http, _ = client
+    proxy_url = "socks5://user:pass@proxy.example:1080"
+    monkeypatch.setattr(api_module.settings, "telegram_proxy_url", proxy_url)
+    client_kwargs = []
+    original_client = httpx.AsyncClient
+
+    def telegram(_request):
+        return httpx.Response(200, json={"ok": True, "result": "https://t.me/$test-only"})
+
+    def fake_client(*args, **kwargs):
+        client_kwargs.append(dict(kwargs))
+        kwargs.pop("proxy", None)
+        return original_client(*args, transport=httpx.MockTransport(telegram), **kwargs)
+
+    monkeypatch.setattr(api_module.httpx, "AsyncClient", fake_client)
+    response = await http.post("/api/subscription/pro/invoice", headers=telegram_headers(42))
+    assert response.status_code == 200
+    assert client_kwargs == [{"timeout": 10, "proxy": proxy_url}]
