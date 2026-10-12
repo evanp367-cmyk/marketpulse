@@ -1,12 +1,18 @@
+import asyncio
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
+from time import monotonic
 import httpx
 from backend.app.core.config import settings
 
 class MarketDataError(RuntimeError): pass
 class BinancePublicProvider:
     """Public spot market-data adapter. Commercial redistribution rights must be checked separately."""
-    def __init__(self): self.base = settings.binance_rest_base.rstrip("/")
+    def __init__(self):
+        self.base = settings.binance_rest_base.rstrip("/")
+        self._ticker_snapshot: list[dict] | None = None
+        self._ticker_snapshot_at = 0.0
+        self._ticker_lock = asyncio.Lock()
     async def _get(self, path: str, params: dict | None = None):
         try:
             async with httpx.AsyncClient(timeout=httpx.Timeout(10.0, connect=5.0)) as client:
@@ -22,15 +28,42 @@ class BinancePublicProvider:
         except (httpx.HTTPError, ValueError) as exc:
             raise MarketDataError(f"Binance market data unavailable: {type(exc).__name__}") from exc
     async def ticker_24h(self, symbols: list[str] | None = None):
-        data = await self._get("/api/v3/ticker/24hr")
         normalized_symbols = {item.strip().upper() for item in symbols or [] if item and item.strip()}
-        if symbols is not None:
-            data = [x for x in data if str(x.get("symbol", "")).upper() in normalized_symbols]
-        result=[]
-        for x in data:
+        if symbols is not None and not normalized_symbols:
+            return []
+        if symbols is not None and len(normalized_symbols) == 1:
+            symbol = next(iter(normalized_symbols))
+            if self._ticker_snapshot is not None and monotonic() - self._ticker_snapshot_at < 15:
+                return [item for item in self._ticker_snapshot if item["symbol"].upper() == symbol]
             try:
-                result.append({"symbol": x["symbol"], "price": str(Decimal(x["lastPrice"])), "change_percent": str(Decimal(x["priceChangePercent"])), "quote_volume": str(Decimal(x["quoteVolume"])), "source": "Binance Spot", "updated_at": datetime.now(timezone.utc).isoformat()})
-            except (KeyError, InvalidOperation): continue
+                data = await self._get("/api/v3/ticker/24hr", {"symbol": symbol})
+            except MarketDataError as exc:
+                upstream = exc.__cause__
+                if isinstance(upstream, httpx.HTTPStatusError) and upstream.response.status_code == 400:
+                    return []
+                raise
+            items = self._normalize_tickers([data] if isinstance(data, dict) else data)
+            return [item for item in items if item["symbol"].upper() == symbol]
+
+        if self._ticker_snapshot is None or monotonic() - self._ticker_snapshot_at >= 15:
+            async with self._ticker_lock:
+                if self._ticker_snapshot is None or monotonic() - self._ticker_snapshot_at >= 15:
+                    data = await self._get("/api/v3/ticker/24hr")
+                    self._ticker_snapshot = self._normalize_tickers(data)
+                    self._ticker_snapshot_at = monotonic()
+        if symbols is None:
+            return self._ticker_snapshot
+        return [item for item in self._ticker_snapshot if item["symbol"].upper() in normalized_symbols]
+
+    @staticmethod
+    def _normalize_tickers(data: list[dict]) -> list[dict]:
+        updated_at = datetime.now(timezone.utc).isoformat()
+        result = []
+        for item in data:
+            try:
+                result.append({"symbol": item["symbol"], "price": str(Decimal(item["lastPrice"])), "change_percent": str(Decimal(item["priceChangePercent"])), "quote_volume": str(Decimal(item["quoteVolume"])), "source": "Binance Spot", "updated_at": updated_at})
+            except (KeyError, InvalidOperation):
+                continue
         return result
     async def ticker_prices(self, symbols: list[str]) -> dict[str, str]:
         """Fetch current last-traded prices for a bounded list of Spot symbols."""

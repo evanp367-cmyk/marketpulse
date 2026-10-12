@@ -93,6 +93,7 @@ def test_partial_valuation_preserves_known_value_and_missing_count():
     assert total["priced_positions"] == total["unpriced_positions"] == 1
 
 
+import asyncio
 import json
 import pytest
 from backend.app.providers.binance import BinancePublicProvider
@@ -123,8 +124,11 @@ async def test_ticker_prices_normalizes_and_deduplicates_symbols(monkeypatch):
 @pytest.mark.asyncio
 async def test_ticker_24h_symbol_filter_is_case_insensitive(monkeypatch):
     provider = BinancePublicProvider()
+    captured = {}
 
     async def fake_get(path, params=None):
+        captured["path"] = path
+        captured["params"] = params
         return [
             {"symbol": "BTCUSDT", "lastPrice": "65000", "priceChangePercent": "1.2", "quoteVolume": "100"},
             {"symbol": "ETHUSDT", "lastPrice": "3000", "priceChangePercent": "-0.5", "quoteVolume": "200"},
@@ -133,6 +137,7 @@ async def test_ticker_24h_symbol_filter_is_case_insensitive(monkeypatch):
     monkeypatch.setattr(provider, "_get", fake_get)
     result = await provider.ticker_24h(["btcusdt"])
     assert [item["symbol"] for item in result] == ["BTCUSDT"]
+    assert captured == {"path": "/api/v3/ticker/24hr", "params": {"symbol": "BTCUSDT"}}
 
 
 @pytest.mark.asyncio
@@ -144,6 +149,26 @@ async def test_ticker_24h_empty_filter_does_not_return_entire_market(monkeypatch
 
     monkeypatch.setattr(provider, "_get", fake_get)
     assert await provider.ticker_24h([""]) == []
+
+
+@pytest.mark.asyncio
+async def test_concurrent_full_ticker_requests_share_short_lived_snapshot(monkeypatch):
+    provider = BinancePublicProvider()
+    calls = 0
+
+    async def fake_get(path, params=None):
+        nonlocal calls
+        calls += 1
+        await asyncio.sleep(0)
+        return [{"symbol": "BTCUSDT", "lastPrice": "65000", "priceChangePercent": "1.2", "quoteVolume": "100"}]
+
+    monkeypatch.setattr(provider, "_get", fake_get)
+    results = await asyncio.gather(*(provider.ticker_24h() for _ in range(10)))
+    assert calls == 1
+    assert all(result[0]["price"] == "65000" for result in results)
+    provider._ticker_snapshot_at -= 16
+    assert (await provider.ticker_24h())[0]["symbol"] == "BTCUSDT"
+    assert calls == 2
 
 
 @pytest.mark.asyncio
