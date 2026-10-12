@@ -2,6 +2,7 @@ import asyncio
 from datetime import datetime, timezone
 from aiogram import Bot, Dispatcher, F
 from aiogram.client.session.aiohttp import AiohttpSession
+from aiogram.client.telegram import TelegramAPIServer
 from aiogram.filters import Command, CommandStart
 from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo, PreCheckoutQuery
 from sqlalchemy import select
@@ -17,7 +18,13 @@ async def main():
     if settings.telegram_pro_price_stars < 1:
         raise RuntimeError("TELEGRAM_PRO_PRICE_STARS must be a positive integer")
     proxy_url = settings.telegram_proxy_url.strip()
-    session = AiohttpSession(proxy=proxy_url) if proxy_url else None
+    api_url = settings.telegram_api_base_url.strip()
+    session_options = {}
+    if proxy_url:
+        session_options["proxy"] = proxy_url
+    if api_url:
+        session_options["api"] = TelegramAPIServer.from_base(api_url)
+    session = AiohttpSession(**session_options) if session_options else None
     bot = Bot(settings.telegram_bot_token, session=session)
     dp = Dispatcher()
     support_waiting: set[int] = set()
