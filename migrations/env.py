@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 from backend.app.core.config import settings
 from backend.app.db.url import async_database_url
 from backend.app.models.models import Base
+import backend.app.signals.models  # noqa: F401 - register signal tables with metadata
 
 config = context.config
 target_metadata = Base.metadata
