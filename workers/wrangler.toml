@@ -1,0 +1,4 @@
+name = "marketpulse-telegram-api"
+main = "telegram-api.mjs"
+compatibility_date = "2026-10-12"
+workers_dev = true

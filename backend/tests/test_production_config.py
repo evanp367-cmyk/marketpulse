@@ -57,6 +57,27 @@ def test_production_accepts_socks_proxy_and_rejects_malformed_proxy():
     assert any("TELEGRAM_PROXY_URL" in error for error in errors)
 
 
+def test_production_accepts_private_telegram_api_base_and_rejects_unsafe_urls():
+    base_url = "https://marketpulse-telegram-api.example.workers.dev/" + "a" * 64
+    assert production_config_errors(production_settings(
+        telegram_api_base_url=base_url,
+    )) == []
+    for unsafe_url in (
+        "http://worker.example/secret",
+        "https://user:password@worker.example/secret",
+        "https://worker.example/secret?token=visible",
+    ):
+        errors = production_config_errors(production_settings(
+            telegram_api_base_url=unsafe_url,
+        ))
+        assert any("TELEGRAM_API_BASE_URL" in error for error in errors)
+    errors = production_config_errors(production_settings(
+        telegram_api_base_url=base_url,
+        telegram_proxy_url="socks5://proxy.example:1080",
+    ))
+    assert any("either TELEGRAM_API_BASE_URL or TELEGRAM_PROXY_URL" in error for error in errors)
+
+
 def test_production_guard_is_not_applied_to_local_development():
     local = Settings(environment="development", database_url="sqlite+aiosqlite:///./marketpulse.db")
     assert production_config_errors(local) == []

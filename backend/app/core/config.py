@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     telegram_bot_token: str = ""
     telegram_bot_username: str = ""
     telegram_proxy_url: str = ""
+    telegram_api_base_url: str = ""
     telegram_pro_price_stars: int = Field(default=250, ge=1, le=1000000)
     support_admin_ids: str = ""
     telegram_initdata_max_age_seconds: int = 86400
@@ -46,6 +47,20 @@ def production_config_errors(config: Settings) -> list[str]:
             valid_proxy = False
         if not valid_proxy:
             errors.append("TELEGRAM_PROXY_URL must be an HTTP or SOCKS5 proxy URL with host and port")
+    if config.telegram_api_base_url.strip():
+        try:
+            api_url = urlsplit(config.telegram_api_base_url.strip())
+            valid_api_url = (
+                api_url.scheme == "https" and bool(api_url.hostname)
+                and not api_url.username and not api_url.password
+                and not api_url.query and not api_url.fragment
+            )
+        except ValueError:
+            valid_api_url = False
+        if not valid_api_url:
+            errors.append("TELEGRAM_API_BASE_URL must be an HTTPS URL without credentials, query, or fragment")
+    if config.telegram_api_base_url.strip() and config.telegram_proxy_url.strip():
+        errors.append("Set either TELEGRAM_API_BASE_URL or TELEGRAM_PROXY_URL, not both")
     if not config.mini_app_url.strip().startswith("https://"):
         errors.append("MINI_APP_URL must be the public HTTPS frontend URL")
     origins = [origin.strip().rstrip("/") for origin in config.cors_origins.split(",") if origin.strip()]
