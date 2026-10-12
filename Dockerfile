@@ -12,6 +12,8 @@ RUN python -m pip install --upgrade pip && \
     groupadd --system app && useradd --system --gid app --home-dir /app app
 
 COPY --chown=app:app backend ./backend
+COPY --chown=app:app alembic.ini ./alembic.ini
+COPY --chown=app:app migrations ./migrations
 USER app
 
 EXPOSE 8000

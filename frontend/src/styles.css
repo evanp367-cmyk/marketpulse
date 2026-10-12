@@ -53,6 +53,24 @@
 .portfolio-form label{display:grid;gap:7px;color:var(--muted);font-size:10px;line-height:1.4}
 .portfolio-form input{width:100%;min-width:0;padding:11px 12px;border:1px solid var(--line);border-radius:6px;background:var(--panel2);color:var(--text);font:12px 'DM Mono',monospace;outline:none}
 .portfolio-form input:focus{border-color:var(--green)}
+
+/* Price alerts */
+.alert-panel{margin-bottom:18px;padding-bottom:18px}
+.alert-panel .panel-head{gap:16px;align-items:flex-start}
+.alert-panel .panel-head p{margin-top:7px;line-height:1.5}
+.alert-form{display:grid;grid-template-columns:repeat(5,minmax(120px,1fr));gap:11px;padding:0 18px 14px;align-items:end}
+.alert-form label{display:grid;gap:7px;min-width:0;color:var(--muted);font-size:10px}
+.alert-form input,.alert-form select{width:100%;min-width:0;padding:10px;border:1px solid var(--line);border-radius:6px;background:var(--panel2);color:var(--text);font:11px Manrope,sans-serif}
+.alert-actions{display:flex;gap:6px;flex-wrap:wrap}
+.alert-note{padding:0 18px 14px;line-height:1.5}
+.alert-list,.alert-history{border-top:1px solid var(--line);padding:14px 18px}
+.alert-row{display:flex;justify-content:space-between;align-items:center;gap:14px;padding:10px 0;border-top:1px solid var(--line);font-size:11px}
+.alert-row:first-child{border-top:0}
+.alert-row strong,.alert-row small{display:block}
+.alert-row small{color:var(--muted);margin-top:4px}
+.alert-history h3{display:flex;align-items:center;gap:8px;font-size:12px}
+@media(max-width:1000px){.alert-form{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:650px){.alert-form{grid-template-columns:1fr}.alert-row{align-items:flex-start;flex-direction:column}.alert-panel .panel-head{flex-direction:column}}
 .portfolio-form label small{font-size:9px;line-height:1.45}
 .portfolio-submit{display:flex;align-items:center;justify-content:center;gap:7px;min-height:38px;padding:0 14px;border:1px solid var(--green);border-radius:6px;background:var(--green);color:#07130f;font:700 11px Manrope,sans-serif;white-space:nowrap;cursor:pointer}
 .portfolio-submit:disabled{opacity:.55;cursor:wait}
