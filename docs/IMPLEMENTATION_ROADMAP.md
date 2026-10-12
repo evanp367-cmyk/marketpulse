@@ -1,23 +1,31 @@
-# MarketPulse implementation roadmap
+# MarketPulse: ближайшие этапы
 
-## Agreed direction
-- Binance Spot public market data is the primary crypto quote/candle source for the first release.
-- Do not purchase a paid market-data API until product demand or source limitations justify it.
-- Preserve the current frontend design; add functionality within the existing layout.
-- Do not display fabricated market prices, placeholder news, or pretend alert delivery works when it does not.
-- Finish portfolio, then implement/test signals and connect a verified news source; only then harden hosting and add Telegram Mini App monetization.
+Текущая опубликованная основа — `main` с ценовыми алертами. Этап 1, **Quiet Momentum**, выполняется в отдельной ветке: единая тема и адаптивная навигация для desktop и Telegram Mini App. Деплой не входит в этот этап.
 
-## Current merged milestone: 0.3.0
-- Base: MarketPulse 0.2.0.
-- Applied: portfolio 0.3.0 patch.
-- Portfolio uses manual Spot positions and Binance Spot prices. Unrealized P/L is only calculated when an entry price is entered. Totals are grouped by quote asset, not incorrectly added across currencies.
-- Backend tests: `python -m pytest -q` — 22 passed in this build environment.
-- Frontend production build is not verified here because dependencies are not installed in this environment. Run `npm install` and `npm run build` on the development Mac.
+В рабочей копии также есть незавершённые локальные заготовки для алертов, новостей, портфеля, платежей и отдельных экранов. Они не считаются готовыми функциями; перед следующим этапом нужно просмотреть diff и интегрировать их отдельно. Не удалять эти изменения при переходе между этапами.
 
-## Next milestones
-1. Run the merged build on the developer's Mac and confirm portfolio UI and live Binance connectivity.
-2. Signals: define supported conditions, evaluate rules against live Binance quotes/candles, persist alert firing history, add cooldown/deduplication, and deliver through Telegram with retries. Until this is implemented, saved alert rules must not be described as active signals.
-3. News: select a source whose licensing permits the intended commercial use; add source attribution, timestamps, language/category filters, caching, and explicit unavailable/stale states. Do not fabricate articles or AI sentiment.
-4. Production: configuration/secrets review, database migrations, rate limiting, logging, health checks, backups, deployment and smoke tests.
-5. Telegram Mini App: validate Telegram initData server-side, deploy frontend on HTTPS, wire bot launch button, test on mobile and desktop.
-6. Monetization: Free/Pro entitlements enforced on backend, then Telegram Stars invoices and payment lifecycle handling; test successful payment, duplicate events, cancellation, expiration, and refunds before charging real users.
+## Этап 2 — терминал и скорость
+
+- Измерить загрузку на телефоне и desktop: первое отображение, рыночные данные, переключение разделов, размер бандла.
+- Улучшить экран терминала и список рынков без потери поиска, избранного, графика и источников данных.
+- Устранить подтверждённые задержки; повторить измерения и сборку.
+
+## Этап 3 — MarketPulse Signals
+
+- Реализовать первую подтверждаемую версию рыночных событий на данных Binance Spot.
+- Показать источник, время, формулу и доступные показатели; не выдавать оценку за вероятность прибыли.
+- Связать карточки с графиком, избранным и существующими ценовыми уведомлениями, сохранив отдельность этих подсистем.
+- Проверить дедупликацию, ограничения частоты и фактическую Telegram-доставку.
+
+## Этап 4 — поток и устойчивость
+
+- Оценить Binance Spot WebSocket с общим подключением, контролем свежести и REST fallback.
+- Проверить восстановление после разрыва, rate limits и нагрузку на текущий VPS.
+
+## Этап 5 — остальные продуктовые функции и production
+
+- Завершить портфельный учёт, новости и календарь только с подтверждёнными источниками; ИИ-анализ добавлять только при работающей модели.
+- Отдельно проверить безопасность, платежи Stars, миграции, резервные копии, мониторинг и восстановление.
+- Production менять только после отдельной проверки и разрешения пользователя.
+
+Каждый этап заканчивается работающим кодом, проверками и отдельной фиксацией в Git. Следующий запуск: **этап 2 — измерить и улучшить терминал и первую загрузку**, не начиная Signals заранее.
