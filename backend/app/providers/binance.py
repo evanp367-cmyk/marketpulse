@@ -13,21 +13,33 @@ class BinancePublicProvider:
         self._ticker_snapshot: list[dict] | None = None
         self._ticker_snapshot_at = 0.0
         self._ticker_lock = asyncio.Lock()
+        self._client_lock = asyncio.Lock()
+        self._client: httpx.AsyncClient | None = None
+    async def _http_client(self) -> httpx.AsyncClient:
+        if self._client is None or self._client.is_closed:
+            async with self._client_lock:
+                if self._client is None or self._client.is_closed:
+                    self._client = httpx.AsyncClient(
+                        timeout=httpx.Timeout(10.0, connect=5.0),
+                        limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
+                    )
+        return self._client
     async def aclose(self):
-        """Requests use short-lived clients; keep worker shutdown symmetric."""
-        return None
+        if self._client is not None:
+            await self._client.aclose()
+            self._client = None
     async def _get(self, path: str, params: dict | None = None):
         try:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(10.0, connect=5.0)) as client:
-                for attempt in range(2):
-                    try:
-                        response = await client.get(f"{self.base}{path}", params=params)
-                    except (httpx.ConnectError, httpx.ConnectTimeout):
-                        if attempt == 0:
-                            continue
-                        raise
-                    response.raise_for_status()
-                    return response.json()
+            client = await self._http_client()
+            for attempt in range(2):
+                try:
+                    response = await client.get(f"{self.base}{path}", params=params)
+                except (httpx.ConnectError, httpx.ConnectTimeout):
+                    if attempt == 0:
+                        continue
+                    raise
+                response.raise_for_status()
+                return response.json()
         except (httpx.HTTPError, ValueError) as exc:
             raise MarketDataError(f"Binance market data unavailable: {type(exc).__name__}") from exc
     async def ticker_24h(self, symbols: list[str] | None = None):
@@ -51,7 +63,9 @@ class BinancePublicProvider:
         if self._ticker_snapshot is None or monotonic() - self._ticker_snapshot_at >= 15:
             async with self._ticker_lock:
                 if self._ticker_snapshot is None or monotonic() - self._ticker_snapshot_at >= 15:
-                    data = await self._get("/api/v3/ticker/24hr")
+                    # MINI contains the fields used by the UI in about half
+                    # the bytes of Binance's full 24-hour ticker response.
+                    data = await self._get("/api/v3/ticker/24hr", {"type": "MINI"})
                     self._ticker_snapshot = self._normalize_tickers(data)
                     self._ticker_snapshot_at = monotonic()
         if symbols is None:
@@ -64,8 +78,19 @@ class BinancePublicProvider:
         result = []
         for item in data:
             try:
-                result.append({"symbol": item["symbol"], "price": str(Decimal(item["lastPrice"])), "change_percent": str(Decimal(item["priceChangePercent"])), "quote_volume": str(Decimal(item["quoteVolume"])), "source": "Binance Spot", "updated_at": updated_at})
-            except (KeyError, InvalidOperation):
+                price = Decimal(item["lastPrice"])
+                quote_volume = Decimal(item["quoteVolume"])
+                if "priceChangePercent" in item:
+                    change = Decimal(item["priceChangePercent"])
+                else:
+                    open_price = Decimal(item["openPrice"])
+                    if open_price <= 0:
+                        continue
+                    change = ((price - open_price) / open_price * 100).quantize(Decimal("0.001"))
+                if not all(value.is_finite() for value in (price, change, quote_volume)) or price <= 0 or quote_volume < 0:
+                    continue
+                result.append({"symbol": item["symbol"], "price": str(price), "change_percent": str(change), "quote_volume": str(quote_volume), "source": "Binance Spot", "updated_at": updated_at})
+            except (KeyError, InvalidOperation, TypeError, ZeroDivisionError):
                 continue
         return result
     async def ticker_prices(self, symbols: list[str]) -> dict[str, str]:

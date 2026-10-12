@@ -165,10 +165,53 @@ async def test_concurrent_full_ticker_requests_share_short_lived_snapshot(monkey
     monkeypatch.setattr(provider, "_get", fake_get)
     results = await asyncio.gather(*(provider.ticker_24h() for _ in range(10)))
     assert calls == 1
+    assert provider._ticker_snapshot is not None
     assert all(result[0]["price"] == "65000" for result in results)
     provider._ticker_snapshot_at -= 16
     assert (await provider.ticker_24h())[0]["symbol"] == "BTCUSDT"
     assert calls == 2
+
+
+@pytest.mark.asyncio
+async def test_full_ticker_uses_mini_payload_and_preserves_change(monkeypatch):
+    provider = BinancePublicProvider()
+    calls = []
+
+    async def fake_get(path, params=None):
+        calls.append((path, params))
+        return [
+            {"symbol": "BTCUSDT", "openPrice": "100", "lastPrice": "105", "quoteVolume": "300"},
+            {"symbol": "BADUSDT", "openPrice": "0", "lastPrice": "1", "quoteVolume": "1"},
+        ]
+
+    monkeypatch.setattr(provider, "_get", fake_get)
+    assert await provider.ticker_24h() == [{
+        "symbol": "BTCUSDT", "price": "105", "change_percent": "5.000",
+        "quote_volume": "300", "source": "Binance Spot",
+        "updated_at": provider._ticker_snapshot[0]["updated_at"],
+    }]
+    assert calls == [("/api/v3/ticker/24hr", {"type": "MINI"})]
+
+
+@pytest.mark.asyncio
+async def test_binance_reuses_one_http_client_and_closes_it(monkeypatch):
+    provider = BinancePublicProvider()
+    original_client = httpx.AsyncClient
+    clients = []
+
+    def make_client(**kwargs):
+        client = original_client(transport=httpx.MockTransport(
+            lambda request: httpx.Response(200, json={"ok": True})
+        ), **kwargs)
+        clients.append(client)
+        return client
+
+    monkeypatch.setattr(httpx, "AsyncClient", make_client)
+    assert await provider._get("/api/v3/ping") == {"ok": True}
+    assert await provider._get("/api/v3/ping") == {"ok": True}
+    assert len(clients) == 1
+    await provider.aclose()
+    assert clients[0].is_closed
 
 
 @pytest.mark.asyncio
