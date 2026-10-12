@@ -8,9 +8,9 @@ type Rule = {
   last_triggered_at: string | null;
 };
 type Event = { id: number; symbol: string; price: string; status: string; created_at: string };
-type Props = { lang: 'ru' | 'en'; selectedSymbol: string };
+type Props = { lang: 'ru' | 'en'; selectedSymbol: string; symbols: string[]; onHistoryLoaded?: (events: Event[]) => void };
 
-export default function Alerts({ lang, selectedSymbol }: Props) {
+export default function Alerts({ lang, selectedSymbol, symbols, onHistoryLoaded }: Props) {
   const ru = lang === 'ru';
   const [rules, setRules] = useState<Rule[]>([]);
   const [evaluationEnabled, setEvaluationEnabled] = useState(false);
@@ -32,6 +32,7 @@ export default function Alerts({ lang, selectedSymbol }: Props) {
         api<{ items: Event[] }>('/api/alerts/history'),
       ]);
       setRules(r.items); setEvaluationEnabled(r.evaluation_enabled); setHistory(h.items);
+      onHistoryLoaded?.(h.items);
     } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
   }
   useEffect(() => { void reload(); }, []);
@@ -81,11 +82,11 @@ export default function Alerts({ lang, selectedSymbol }: Props) {
     {!evaluationEnabled && <div className="error-banner">{ru ? 'Уведомления ещё не включены на сервере. Правила можно сохранить, но сообщения пока не отправляются.' : 'Notifications are not yet enabled on the server. Rules can be saved, but messages are not sent yet.'}</div>}
     <form className="alert-form" onSubmit={e => void save(e)}>
       <label>{ru ? 'Название' : 'Name'}<input value={name} onChange={e => setName(e.target.value)} required maxLength={120} placeholder={ru ? 'Например, BTC выше 100 000' : 'For example, BTC above 100,000'} /></label>
-      <label>{ru ? 'Пара Binance Spot' : 'Binance Spot pair'}<input value={symbol} onChange={e => setSymbol(e.target.value.toUpperCase())} required pattern="[A-Za-z0-9]{5,30}" maxLength={30} /></label>
+      <label>{ru ? 'Пара Binance Spot' : 'Binance Spot pair'}<input list="alert-symbols" value={symbol} onChange={e => setSymbol(e.target.value.toUpperCase())} required pattern="[A-Za-z0-9]{5,30}" maxLength={30} /><datalist id="alert-symbols">{symbols.map(item => <option key={item} value={item}/>)}</datalist></label>
       <label>{ru ? 'Условие' : 'Condition'}<select value={direction} onChange={e => setDirection(e.target.value as 'above' | 'below')}><option value="above">{ru ? 'Цена ≥' : 'Price ≥'}</option><option value="below">{ru ? 'Цена ≤' : 'Price ≤'}</option></select></label>
-      <label>{ru ? 'Порог' : 'Threshold'}<input value={threshold} onChange={e => setThreshold(e.target.value)} required inputMode="decimal" type="number" min="0.000000000001" step="any" placeholder="100000" /></label>
+      <label>{ru ? 'Цена срабатывания' : 'Trigger price'}<input value={threshold} onChange={e => setThreshold(e.target.value)} required inputMode="decimal" type="number" min="0.000000000001" step="any" placeholder="100000" /></label>
       <label>{ru ? 'Пауза между срабатываниями' : 'Cooldown'}<select value={cooldown} onChange={e => setCooldown(Number(e.target.value))}><option value={900}>15 {ru ? 'минут' : 'minutes'}</option><option value={3600}>1 {ru ? 'час' : 'hour'}</option><option value={86400}>24 {ru ? 'часа' : 'hours'}</option></select></label>
-      <div className="alert-actions"><button className="refresh" disabled={busy} type="submit"><Plus size={15}/>{editing === null ? (ru ? 'Добавить' : 'Add alert') : (ru ? 'Сохранить' : 'Save')}</button>{editing !== null && <button type="button" className="refresh" onClick={reset}>{ru ? 'Отмена' : 'Cancel'}</button>}</div>
+      <div className="alert-actions"><button className="refresh primary-action" disabled={busy} type="submit"><Plus size={18}/>{editing === null ? (ru ? 'Создать уведомление' : 'Create alert') : (ru ? 'Сохранить' : 'Save')}</button>{editing !== null && <button type="button" className="refresh" onClick={reset}>{ru ? 'Отмена' : 'Cancel'}</button>}</div>
     </form>
     <p className="alert-note">{ru ? 'Бесплатно: до 2 правил; Pro: до 20. Проверка примерно раз в 30 секунд при доступности Binance. Бот должен быть открыт через /start, чтобы получать сообщения.' : 'Free: up to 2 rules; Pro: up to 20. Checks run about every 30 seconds when Binance is available. Open the bot with /start to receive messages.'}</p>
     <div className="alert-list">{rules.map(rule => <div className="alert-row" key={rule.id}>

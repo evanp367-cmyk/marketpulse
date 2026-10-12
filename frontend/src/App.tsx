@@ -24,9 +24,11 @@ import {
 import { api, type Ticker, type Candle, type OfficialFxResponse, type WorldFxResponse, type FxCurrency, type FxCurrencyCatalog, type FxConversionResponse, type PortfolioResponse } from './api';
 import Chart from './Chart';
 import Alerts from './Alerts';
+import Navigation, { type Page } from './Navigation';
+import useUnreadAlerts from './useUnreadAlerts';
+import { ChartSkeleton, MarketSkeleton } from './LoadingState';
 
 type Lang = 'ru' | 'en';
-type Page = 'terminal' | 'currencies' | 'portfolio' | 'signals' | 'news' | 'plans';
 type FxMode = 'world' | 'cbr';
 type ConverterPickerTarget = 'from' | 'to' | null;
 
@@ -158,10 +160,22 @@ function formatRateDate(value: string, lang: Lang): string {
   }).format(date);
 }
 
+function savedPreference(key: string): string | null {
+  try { return localStorage.getItem(key); } catch { return null; }
+}
+
+const pages: Page[] = ['terminal', 'markets', 'currencies', 'portfolio', 'signals', 'alerts', 'news', 'plans'];
+function pageFromLocation(): Page {
+  const hash = window.location.hash.slice(1);
+  return pages.includes(hash as Page) ? hash as Page : 'terminal';
+}
+
 export default function App() {
-  const [lang, setLang] = useState<Lang>('ru');
-  const [dark, setDark] = useState(true);
-  const [page, setPage] = useState<Page>('terminal');
+  const [lang, setLang] = useState<Lang>(() => savedPreference('marketpulse-language') === 'en' ? 'en' : 'ru');
+  const [dark, setDark] = useState(() => savedPreference('marketpulse-theme') !== 'light');
+  const [page, setPage] = useState<Page>(pageFromLocation);
+  const { unreadCount, markSeen } = useUnreadAlerts(page === 'alerts');
+  const [onlyFavorites, setOnlyFavorites] = useState(false);
   const [tickers, setTickers] = useState<Ticker[]>([]);
   const [featuredTicker, setFeaturedTicker] = useState<Ticker | null>(null);
   const [candles, setCandles] = useState<Candle[]>([]);
@@ -522,6 +536,34 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (!window.history.state?.marketpulse) {
+      window.history.replaceState({ ...window.history.state, marketpulse: true, depth: 0 }, '');
+    }
+    const restorePage = () => setPage(pageFromLocation());
+    window.addEventListener('popstate', restorePage);
+    window.addEventListener('hashchange', restorePage);
+    return () => {
+      window.removeEventListener('popstate', restorePage);
+      window.removeEventListener('hashchange', restorePage);
+    };
+  }, []);
+
+  useEffect(() => {
+    const backButton = window.Telegram?.WebApp?.BackButton;
+    if (!backButton) return;
+    if (page === 'terminal') backButton.hide();
+    else backButton.show();
+    const goBack = () => {
+      if (window.history.state?.marketpulse && window.history.state.depth > 0) window.history.back();
+      else navigate('terminal');
+    };
+    backButton.onClick(goBack);
+    return () => backButton.offClick(goBack);
+    // Keep Telegram's back control synchronized with the current screen.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [page]);
+
+  useEffect(() => {
     void loadCandles(selected);
     void loadFeaturedTicker(selected);
     return () => {
@@ -541,6 +583,12 @@ export default function App() {
   }, [page, selected, signalInterval]);
 
   useEffect(() => {
+    if (page === 'news') void loadNews();
+    if (page === 'plans') void loadPlans();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [page]);
+
+  useEffect(() => {
     if (page !== 'currencies') return;
     if (worldCurrencies.length === 0) void loadCurrencyCatalog();
     if (fxMode === 'world' && worldFx === null && !worldFxBusy) void loadWorldRates();
@@ -548,10 +596,16 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [page, fxMode]);
 
+  useEffect(() => {
+    document.documentElement.lang = lang;
+    document.querySelector('meta[name="theme-color"]')?.setAttribute('content', dark ? '#14181b' : '#f3f4f0');
+    try { localStorage.setItem('marketpulse-language', lang); localStorage.setItem('marketpulse-theme', dark ? 'dark' : 'light'); } catch { /* Preferences still work when browser storage is unavailable. */ }
+  }, [lang, dark]);
+
   const filtered = useMemo(() => tickers
-    .filter(item => item.symbol.includes(search.toUpperCase()))
+    .filter(item => item.symbol.includes(search.toUpperCase()) && (!onlyFavorites || favorites.includes(item.symbol)))
     .sort((a, b) => Number(favorites.includes(b.symbol)) - Number(favorites.includes(a.symbol)))
-    .slice(0, 80), [tickers, search, favorites]);
+    .slice(0, 80), [tickers, search, favorites, onlyFavorites]);
   const current = featuredTicker?.symbol === selected ? featuredTicker : tickers.find(item => item.symbol === selected);
   const portfolioSuggestions = useMemo(() => {
     const query = positionSearch.trim().toLocaleLowerCase();
@@ -605,44 +659,39 @@ export default function App() {
     }
   }
 
+  function navigate(next: Page) {
+    if (next === 'markets') setOnlyFavorites(false);
+    if (next !== page) {
+      const depth = window.history.state?.marketpulse ? window.history.state.depth + 1 : 1;
+      window.history.pushState({ marketpulse: true, depth }, '', `#${next}`);
+      setPage(next);
+    }
+    window.scrollTo({ top: 0, behavior: 'instant' });
+  }
+
   function showUnavailable(message: string) {
     setError(message);
-    setPage('terminal');
+    navigate('terminal');
   }
 
   return (
     <main className={dark ? 'app dark' : 'app light'}>
-      <aside className="sidebar">
-        <div className="brand">
-          <div className="brand-icon"><Activity size={20} /></div>
-          <span>Market<span className="brand-accent">Pulse</span><small>MARKET INTELLIGENCE</small></span>
-        </div>
-        <nav>
-          <button className={`nav ${page === 'terminal' ? 'active' : ''}`} onClick={() => { setPage('terminal'); setError(''); }}><LayoutDashboard size={17} />{t.terminal}</button>
-          <button className={`nav ${page === 'terminal' ? '' : ''}`} onClick={() => { setPage('terminal'); setError(''); document.getElementById('markets')?.scrollIntoView({ behavior: 'smooth' }); }}><ChartCandlestick size={17} />{t.markets}</button>
-          <button className={`nav ${page === 'currencies' ? 'active' : ''}`} onClick={() => { setPage('currencies'); setFxError(''); }}><ArrowLeftRight size={17} />{t.currencies}</button>
-          <button className={`nav ${page === 'signals' ? 'active' : ''}`} onClick={() => { setPage('signals'); }}><Bell size={17} />{t.signals}</button>
-          <button className={`nav ${page === 'news' ? 'active' : ''}`} onClick={() => { setPage('news'); void loadNews(); }}><Newspaper size={17} />{t.news}</button>
-          <button className={`nav ${page === 'portfolio' ? 'active' : ''}`} onClick={() => { setPage('portfolio'); setPortfolioError(''); setPortfolioFormError(''); }}><Wallet size={17} />{t.portfolio}</button>
-          <button className={`nav ${page === 'plans' ? 'active' : ''}`} onClick={() => { setPage('plans'); void loadPlans(); }}><Star size={17} />{lang === 'ru' ? 'Тарифы Free / Pro' : 'Free / Pro plans'}</button>
-          <button className="nav" onClick={() => { setPage('terminal'); setError(''); document.getElementById('markets')?.scrollIntoView({ behavior: 'smooth' }); }}><Star size={17} />{t.watch}</button>
-        </nav>
-        <div className="side-bottom">
-          <span className="connection"><i />{error || fxError ? 'API issue' : 'API connected'}</span>
-          <button className="nav" onClick={() => setDark(!dark)}>{dark ? <Sun size={17} /> : <Moon size={17} />} {t.theme}: {dark ? t.dark : t.light}</button>
-          <button className="nav" onClick={() => setLang(lang === 'ru' ? 'en' : 'ru')}><Globe size={17} />{t.lang}: {lang.toUpperCase()}</button>
-          <div className="chart-credit">Charts by TradingView · Apache 2.0</div>
-        </div>
-      </aside>
+      <Navigation page={page} lang={lang} dark={dark} unreadCount={unreadCount} onTheme={() => setDark(!dark)} onLanguage={() => setLang(lang === 'ru' ? 'en' : 'ru')}
+        onNavigate={navigate}
+        onMarkets={favorite => { navigate('markets'); setOnlyFavorites(favorite); }} />
 
       <section className="workspace">
-        {page === 'signals' ? (
+        {page === 'alerts' ? (
+          <>
+            <header className="topbar"><div><div className="eyebrow">MARKETPULSE · TELEGRAM</div><h1>{lang === 'ru' ? 'Уведомления' : 'Price alerts'}</h1><p>{lang === 'ru' ? 'Задайте цену — мы сообщим, когда условие выполнится' : 'Set a price and get notified when the condition is met'}</p></div><span className="page-symbol"><Bell size={25}/></span></header>
+            <Alerts lang={lang} selectedSymbol={selected} symbols={tickers.map(item => item.symbol)} onHistoryLoaded={markSeen} />
+          </>
+        ) : page === 'signals' ? (
           <>
             <header className="topbar"><div><div className="eyebrow">BINANCE SPOT · TECHNICAL STUDY</div><h1>{lang === 'ru' ? 'Рыночные сигналы' : 'Market signals'}<span className="dot-live" /></h1><p>{lang === 'ru' ? 'Индикаторы по закрытым свечам — без обещаний прибыли' : 'Indicators from closed candles — no profit promises'}</p></div><button className="refresh" onClick={() => void loadSignals()} disabled={signalBusy}><RefreshCw size={16} className={signalBusy ? 'spin' : ''}/>{lang === 'ru' ? 'Обновить' : 'Refresh'}</button></header>
-            <Alerts lang={lang} selectedSymbol={selected} />
             <div className="signal-controls panel"><label>{lang === 'ru' ? 'Инструмент' : 'Instrument'}<select value={selected} onChange={e => setSelected(e.target.value)}>{tickers.slice(0,100).map(x => <option key={x.symbol} value={x.symbol}>{x.symbol}</option>)}</select></label><label>{lang === 'ru' ? 'Таймфрейм' : 'Timeframe'}<select value={signalInterval} onChange={e => {setSignalInterval(e.target.value);}}><option value="15m">15m</option><option value="1h">1h</option><option value="4h">4h</option><option value="1d">1d</option></select></label></div>
             {signalError && <div className="error-banner">{signalError}</div>}
-            {signalData && <><section className="signal-hero panel"><div><span className="eyebrow">{signalData.symbol} · {signalData.interval}</span><h2>{signalData.label === 'bullish_bias' ? (lang === 'ru' ? 'Преобладает бычий импульс' : 'Bullish bias') : signalData.label === 'bearish_bias' ? (lang === 'ru' ? 'Преобладает медвежий импульс' : 'Bearish bias') : (lang === 'ru' ? 'Смешанная картина' : 'Mixed picture')}</h2><p>{lang === 'ru' ? 'Оценка индикаторов, не команда на покупку или продажу.' : 'Indicator summary, not a buy or sell instruction.'}</p></div><div className="signal-score"><strong>{signalData.score > 0 ? '+' : ''}{signalData.score}</strong><small>{lang === 'ru' ? 'балл импульса' : 'momentum score'}</small></div></section><section className="signal-indicators"><article className="panel"><span>RSI · 14</span><strong>{signalData.indicators.rsi14}</strong><small>{signalData.indicators.rsi14 >= 70 ? (lang === 'ru' ? 'Возможная перекупленность' : 'Potentially overbought') : signalData.indicators.rsi14 <= 30 ? (lang === 'ru' ? 'Возможная перепроданность' : 'Potentially oversold') : (lang === 'ru' ? 'Нейтральная зона' : 'Neutral zone')}</small></article><article className="panel"><span>EMA · 20</span><strong>{formatAmount(String(signalData.indicators.ema20), 4)}</strong><small>{lang === 'ru' ? 'Краткосрочный тренд' : 'Short-term trend'}</small></article><article className="panel"><span>EMA · 50</span><strong>{formatAmount(String(signalData.indicators.ema50), 4)}</strong><small>{lang === 'ru' ? 'Среднесрочный тренд' : 'Medium-term trend'}</small></article><article className="panel"><span>MACD HIST.</span><strong className={signalData.indicators.macd_histogram >= 0 ? 'positive' : 'negative'}>{formatAmount(String(signalData.indicators.macd_histogram), 5)}</strong><small>{lang === 'ru' ? 'Импульс' : 'Momentum'}</small></article><article className="panel"><span>BOLLINGER · PRO</span>{signalData.pro_features ? <><strong>{formatAmount(String(signalData.indicators.bollinger_middle), 4)}</strong><small>{lang === 'ru' ? `Диапазон ${formatAmount(String(signalData.indicators.bollinger_lower), 4)} — ${formatAmount(String(signalData.indicators.bollinger_upper), 4)}` : `Range ${formatAmount(String(signalData.indicators.bollinger_lower), 4)} — ${formatAmount(String(signalData.indicators.bollinger_upper), 4)}`}</small></> : <><strong>🔒 Pro</strong><small>{lang === 'ru' ? 'Полосы Боллинджера доступны в Pro' : 'Bollinger Bands are included in Pro'}</small><button className="inline-upgrade" onClick={() => {setPage('plans'); void loadPlans();}}>{lang === 'ru' ? 'Открыть тарифы' : 'View plans'}</button></>}</article></section><section className="panel signal-reasons"><div className="panel-head"><div><span className="eyebrow">WHY THIS SUMMARY</span><h2>{lang === 'ru' ? 'Что повлияло на оценку' : 'What shaped the summary'}</h2></div></div>{signalData.reasons.map((reason: string, i: number) => <div className="signal-reason" key={i}><span>{i+1}</span><p>{reason}</p></div>)}<div className="signal-meta">{lang === 'ru' ? 'Свеча закрыта' : 'Closed candle'}: {new Date(signalData.candle_closed_at).toLocaleString()} · {signalData.source}</div></section></>}
+            {signalData && <><section className="signal-hero panel"><div><span className="eyebrow">{signalData.symbol} · {signalData.interval}</span><h2>{signalData.label === 'bullish_bias' ? (lang === 'ru' ? 'Преобладает бычий импульс' : 'Bullish bias') : signalData.label === 'bearish_bias' ? (lang === 'ru' ? 'Преобладает медвежий импульс' : 'Bearish bias') : (lang === 'ru' ? 'Смешанная картина' : 'Mixed picture')}</h2><p>{lang === 'ru' ? 'Оценка индикаторов, не команда на покупку или продажу.' : 'Indicator summary, not a buy or sell instruction.'}</p></div><div className="signal-score"><strong>{signalData.score > 0 ? '+' : ''}{signalData.score}</strong><small>{lang === 'ru' ? 'балл импульса' : 'momentum score'}</small></div></section><section className="signal-indicators"><article className="panel"><span>RSI · 14</span><strong>{signalData.indicators.rsi14}</strong><small>{signalData.indicators.rsi14 >= 70 ? (lang === 'ru' ? 'Возможная перекупленность' : 'Potentially overbought') : signalData.indicators.rsi14 <= 30 ? (lang === 'ru' ? 'Возможная перепроданность' : 'Potentially oversold') : (lang === 'ru' ? 'Нейтральная зона' : 'Neutral zone')}</small></article><article className="panel"><span>EMA · 20</span><strong>{formatAmount(String(signalData.indicators.ema20), 4)}</strong><small>{lang === 'ru' ? 'Краткосрочный тренд' : 'Short-term trend'}</small></article><article className="panel"><span>EMA · 50</span><strong>{formatAmount(String(signalData.indicators.ema50), 4)}</strong><small>{lang === 'ru' ? 'Среднесрочный тренд' : 'Medium-term trend'}</small></article><article className="panel"><span>MACD HIST.</span><strong className={signalData.indicators.macd_histogram >= 0 ? 'positive' : 'negative'}>{formatAmount(String(signalData.indicators.macd_histogram), 5)}</strong><small>{lang === 'ru' ? 'Импульс' : 'Momentum'}</small></article><article className="panel"><span>BOLLINGER · PRO</span>{signalData.pro_features ? <><strong>{formatAmount(String(signalData.indicators.bollinger_middle), 4)}</strong><small>{lang === 'ru' ? `Диапазон ${formatAmount(String(signalData.indicators.bollinger_lower), 4)} — ${formatAmount(String(signalData.indicators.bollinger_upper), 4)}` : `Range ${formatAmount(String(signalData.indicators.bollinger_lower), 4)} — ${formatAmount(String(signalData.indicators.bollinger_upper), 4)}`}</small></> : <><strong>🔒 Pro</strong><small>{lang === 'ru' ? 'Полосы Боллинджера доступны в Pro' : 'Bollinger Bands are included in Pro'}</small><button className="inline-upgrade" onClick={() => navigate('plans')}>{lang === 'ru' ? 'Открыть тарифы' : 'View plans'}</button></>}</article></section><section className="panel signal-reasons"><div className="panel-head"><div><span className="eyebrow">WHY THIS SUMMARY</span><h2>{lang === 'ru' ? 'Что повлияло на оценку' : 'What shaped the summary'}</h2></div></div>{signalData.reasons.map((reason: string, i: number) => <div className="signal-reason" key={i}><span>{i+1}</span><p>{reason}</p></div>)}<div className="signal-meta">{lang === 'ru' ? 'Свеча закрыта' : 'Closed candle'}: {new Date(signalData.candle_closed_at).toLocaleString()} · {signalData.source}</div></section></>}
             {!signalData && !signalError && <div className="empty panel">{signalBusy ? t.loading : (lang === 'ru' ? 'Выбери инструмент и обнови анализ.' : 'Choose an instrument and refresh analysis.')}</div>}
             <div className="disclaimer"><Settings size={15}/><span>{lang === 'ru' ? 'Сигналы рассчитаны по историческим свечам Binance Spot. Технические индикаторы могут ошибаться и не предсказывают будущее.' : 'Signals use historical Binance Spot candles. Technical indicators can be wrong and do not predict the future.'}</span></div>
           </>
@@ -832,11 +881,11 @@ export default function App() {
                     <tbody>{portfolioData.items.map(item => (
                       <tr key={item.id}>
                         <td><strong>{item.symbol}</strong><small>{item.base_asset ?? item.symbol} / {item.quote_asset}</small></td>
-                        <td>{formatAmount(item.quantity, 12)}</td>
-                        <td>{item.average_entry_price === null ? '—' : `${formatAmount(item.average_entry_price)} ${item.quote_asset}`}</td>
-                        <td>{item.current_price === null ? <span className="negative">{t.portfolioUnknownPrice}</span> : `${formatAmount(item.current_price)} ${item.quote_asset}`}</td>
-                        <td>{item.market_value === null ? '—' : `${formatAmount(item.market_value)} ${item.quote_asset}`}</td>
-                        <td>{item.unrealized_pnl === null ? '—' : <span className={Number(item.unrealized_pnl) >= 0 ? 'positive' : 'negative'}>{Number(item.unrealized_pnl) > 0 ? '+' : ''}{formatAmount(item.unrealized_pnl)} {item.quote_asset}<small>{item.unrealized_pnl_percent === null ? '' : `${Number(item.unrealized_pnl_percent) > 0 ? '+' : ''}${formatAmount(item.unrealized_pnl_percent, 2)}%`}</small></span>}</td>
+                        <td data-label={t.portfolioQuantity}>{formatAmount(item.quantity, 12)}</td>
+                        <td data-label={lang === 'ru' ? 'Цена покупки' : 'Entry price'}>{item.average_entry_price === null ? '—' : `${formatAmount(item.average_entry_price)} ${item.quote_asset}`}</td>
+                        <td data-label={t.portfolioCurrentPrice}>{item.current_price === null ? <span className="negative">{t.portfolioUnknownPrice}</span> : `${formatAmount(item.current_price)} ${item.quote_asset}`}</td>
+                        <td data-label={t.portfolioValue}>{item.market_value === null ? '—' : `${formatAmount(item.market_value)} ${item.quote_asset}`}</td>
+                        <td data-label={t.portfolioPnl}>{item.unrealized_pnl === null ? '—' : <span className={Number(item.unrealized_pnl) >= 0 ? 'positive' : 'negative'}>{Number(item.unrealized_pnl) > 0 ? '+' : ''}{formatAmount(item.unrealized_pnl)} {item.quote_asset}<small>{item.unrealized_pnl_percent === null ? '' : `${Number(item.unrealized_pnl_percent) > 0 ? '+' : ''}${formatAmount(item.unrealized_pnl_percent, 2)}%`}</small></span>}</td>
                         <td><button className="portfolio-delete" title={t.portfolioDelete} aria-label={`${t.portfolioDelete}: ${item.symbol}`} onClick={() => void deletePortfolioPosition(item.id)}><Trash2 size={15} /></button></td>
                       </tr>
                     ))}</tbody>
@@ -902,34 +951,36 @@ export default function App() {
         ) : (
           <>
             <header className="topbar">
-              <div><div className="eyebrow">{t.live}</div><h1>{t.terminal}<span className="dot-live" /></h1><p>{t.subtitle}</p></div>
+              <div><div className="eyebrow">{t.live}</div><h1>{page === 'markets' ? t.markets : t.terminal}<span className="dot-live" /></h1><p>{page === 'markets' ? (lang === 'ru' ? 'Найдите актив, добавьте его в избранное или откройте график.' : 'Find an asset, save it to your watchlist, or open its chart.') : t.subtitle}</p></div>
               <button className="refresh" onClick={() => void load()} disabled={busy}><RefreshCw size={16} className={busy ? 'spin' : ''} />{busy ? '…' : t.retry}</button>
             </header>
             {error && <div className="error-banner"><span>{error}</span><button onClick={() => setError('')}>×</button></div>}
-            <div className="metrics">
-              <div className="metric"><span>TRACKED ASSETS</span><strong>{tickersBusy && !tickers.length ? '…' : tickers.length.toLocaleString()}</strong><small>Binance Spot · API</small></div>
-              <div className="metric"><span>SELECTED PAIR</span><strong>{selected.replace('USDT', '')}<em>/ USDT</em></strong><small>{current ? `${t.price} · ${Number(current.price).toLocaleString(undefined, { maximumFractionDigits: 6 })}` : t.loading}</small></div>
-              <div className="metric"><span>DATA STATUS</span><strong className={error ? 'negative' : 'positive'}>{error ? 'DEGRADED' : 'CONNECTED'}</strong><small>{error || 'Latest API response received'}</small></div>
-            </div>
-            <div className="content-grid">
-              <section className="panel chart-panel">
-                <div className="panel-head"><div><span className="eyebrow">MARKET OVERVIEW</span><h2>{selected.replace('USDT', '')} <span className="pair">/ USDT</span></h2></div><div className="price-block"><strong>{current ? Number(current.price).toLocaleString(undefined, { maximumFractionDigits: 8 }) : '—'}</strong><span className={current && Number(current.change_percent) >= 0 ? 'positive' : 'negative'}>{current ? `${Number(current.change_percent) > 0 ? '+' : ''}${Number(current.change_percent).toFixed(2)}%` : ''}</span></div></div>
+            {page === 'terminal' && <div className="metrics">
+              <div className="metric"><span>{lang === 'ru' ? 'Торговые пары' : 'Trading pairs'}</span><strong>{tickersBusy && !tickers.length ? '…' : tickers.length.toLocaleString()}</strong><small>Binance Spot</small></div>
+              <div className="metric"><span>{lang === 'ru' ? 'Выбранный актив' : 'Selected asset'}</span><strong>{splitTradingPair(selected).base}<em>/ {splitTradingPair(selected).quote}</em></strong><small>{current ? `${t.price} · ${Number(current.price).toLocaleString(undefined, { maximumFractionDigits: 6 })}` : t.loading}</small></div>
+              <div className="metric"><span>{lang === 'ru' ? 'Последняя котировка' : 'Latest quote'}</span><strong className={error ? 'negative' : ''}>{error ? (lang === 'ru' ? 'Нет связи' : 'Unavailable') : current ? new Date(current.updated_at).toLocaleTimeString(lang === 'ru' ? 'ru-RU' : 'en-US', { hour: '2-digit', minute: '2-digit' }) : '—'}</strong><small>{lang === 'ru' ? 'Обновление по запросу' : 'Refresh on demand'}</small></div>
+            </div>}
+            <div className={`content-grid ${page === 'markets' ? 'market-catalog' : ''}`}>
+              {page === 'terminal' && <section className="panel chart-panel">
+                <div className="panel-head"><div><span className="eyebrow">{lang === 'ru' ? 'Динамика цены' : 'Price overview'}</span><h2>{splitTradingPair(selected).base} <span className="pair">/ {splitTradingPair(selected).quote}</span></h2></div><div className="price-block"><strong>{current ? Number(current.price).toLocaleString(undefined, { maximumFractionDigits: 8 }) : '—'}</strong><span className={current && Number(current.change_percent) >= 0 ? 'positive' : 'negative'}>{current ? `${Number(current.change_percent) > 0 ? '+' : ''}${Number(current.change_percent).toFixed(2)}%` : ''}</span></div></div>
                 <div className="chart-tools"><span>{t.chart} · 1H</span><span className="source-label">● {t.source}: Binance</span></div>
-                {candles.length ? <Chart candles={candles} dark={dark} /> : <div className="chart-empty">{chartBusy ? t.loading : chartError || error || t.noData}</div>}
+                {candles.length ? <Chart candles={candles} dark={dark} /> : chartBusy ? <ChartSkeleton label={t.loading} /> : <div className="chart-empty">{chartError || error || t.noData}</div>}
                 <div className="chart-foot"><span>● {t.source}: Binance Spot</span><span>{candles.length ? new Date(candles[candles.length - 1].time * 1000).toLocaleString() : ''}</span></div>
-              </section>
+              </section>}
               <section className="panel watch-panel" id="markets">
                 <div className="panel-head"><div><span className="eyebrow">DISCOVER</span><h2>{t.markets}</h2></div><span className="count">{filtered.length}</span></div>
                 <label className="search"><Search size={16} /><input placeholder={t.search} value={search} onChange={event => setSearch(event.target.value)} /></label>
-                <div className="table-head"><span>ASSET</span><span>{t.price}</span><span>{t.change}</span><span /></div>
+                <div className="market-tabs" role="group" aria-label={lang === 'ru' ? 'Фильтр рынка' : 'Market filter'}><button aria-pressed={!onlyFavorites} onClick={() => setOnlyFavorites(false)}>{lang === 'ru' ? 'Все пары' : 'All pairs'}</button><button aria-pressed={onlyFavorites} onClick={() => setOnlyFavorites(true)}><Star size={14}/>{t.watch}</button></div>
+                <div className="table-head"><span>{lang === 'ru' ? 'Актив' : 'Asset'}</span><span>{t.price}</span><span>{t.change}</span><span /></div>
                 <div className="market-list">
                   {filtered.map(item => <div key={item.symbol} className={`market-row ${selected === item.symbol ? 'selected' : ''}`}>
-                    <button className="asset" onClick={() => setSelected(item.symbol)}><span className="coin">{item.symbol.slice(0, 1)}</span><span><b>{item.symbol.replace('USDT', '')}</b><small>{item.symbol}</small></span></button>
-                    <button className="market-price" onClick={() => setSelected(item.symbol)}>{Number(item.price).toLocaleString(undefined, { maximumFractionDigits: 6 })}</button>
+                    <button className="asset" onClick={() => { setSelected(item.symbol); if (page === 'markets') navigate('terminal'); }}><span className="coin">{item.symbol.slice(0, 1)}</span><span><b>{item.symbol.replace('USDT', '')}</b><small>{item.symbol}</small></span></button>
+                    <button className="market-price" onClick={() => { setSelected(item.symbol); if (page === 'markets') navigate('terminal'); }}>{Number(item.price).toLocaleString(undefined, { maximumFractionDigits: 6 })}</button>
                     <span className={Number(item.change_percent) >= 0 ? 'positive' : 'negative'}>{Number(item.change_percent) > 0 ? '+' : ''}{Number(item.change_percent).toFixed(2)}%</span>
-                    <button className={`fav ${favorites.includes(item.symbol) ? 'on' : ''}`} title={favorites.includes(item.symbol) ? t.remove : t.add} onClick={() => void toggle(item.symbol)}><Star size={15} fill={favorites.includes(item.symbol) ? 'currentColor' : 'none'} /></button>
+                    <button className={`fav ${favorites.includes(item.symbol) ? 'on' : ''}`} aria-label={`${favorites.includes(item.symbol) ? t.remove : t.add}: ${item.symbol}`} aria-pressed={favorites.includes(item.symbol)} title={favorites.includes(item.symbol) ? t.remove : t.add} onClick={() => void toggle(item.symbol)}><Star size={18} fill={favorites.includes(item.symbol) ? 'currentColor' : 'none'} /></button>
                   </div>)}
-                  {!filtered.length && !error && <div className="empty">{tickersBusy ? t.loading : t.noData}</div>}
+                  {!filtered.length && tickersBusy && <MarketSkeleton label={t.loading} />}
+                  {!filtered.length && !tickersBusy && !error && <div className="empty">{onlyFavorites ? (lang === 'ru' ? 'Нажмите на звезду рядом с парой, чтобы добавить её в избранное.' : 'Tap the star next to a pair to add it to your watchlist.') : t.noData}</div>}
                   {error && !tickers.length && <div className="empty"><p>{t.error}</p><button onClick={() => void load()}>{t.retry}</button></div>}
                 </div>
               </section>
