@@ -1,16 +1,15 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
 import { Activity, ArrowLeftRight, Bell, ChartCandlestick, ChevronRight, LayoutGrid, ListFilter, Moon, Newspaper, Star, Sun, Wallet, X, Globe } from 'lucide-react';
 
 export type Page = 'terminal' | 'markets' | 'currencies' | 'portfolio' | 'signals' | 'alerts' | 'news' | 'plans';
 type Props = {
-  page: Page; lang: 'ru' | 'en'; dark: boolean; unreadCount: number;
+  page: Page; lang: 'ru' | 'en'; dark: boolean; unreadCount: number; open: boolean; onOpenChange: (open: boolean) => void;
   onNavigate: (page: Page) => void; onMarkets: (favorites: boolean) => void;
   onTheme: () => void; onLanguage: () => void;
 };
 
-export default function Navigation({ page, lang, dark, unreadCount, onNavigate, onMarkets, onTheme, onLanguage }: Props) {
+export default function Navigation({ page, lang, dark, unreadCount, open, onOpenChange, onNavigate, onMarkets, onTheme, onLanguage }: Props) {
   const ru = lang === 'ru';
-  const [open, setOpen] = useState(false);
   const dialog = useRef<HTMLDialogElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
   const items = [
@@ -32,8 +31,8 @@ export default function Navigation({ page, lang, dark, unreadCount, onNavigate, 
     document.body.style.overflow = 'hidden';
     return () => { dialog.current?.close(); document.body.style.overflow = previous; };
   }, [open]);
-  useEffect(() => { setOpen(false); }, [page]);
-  function close() { setOpen(false); trigger.current?.focus(); }
+  useEffect(() => { if (open) onOpenChange(false); }, [page]);
+  function close() { onOpenChange(false); trigger.current?.focus(); }
   function navigate(next: Page) { close(); onNavigate(next); }
 
   const preferences = <div className="nav-preferences">
@@ -57,9 +56,9 @@ export default function Navigation({ page, lang, dark, unreadCount, onNavigate, 
     </aside>
     <nav className="mobile-dock" aria-label={ru ? 'Основные разделы' : 'Main navigation'}>
       {primary.map(({ id, label, icon: Icon }) => <button key={id} aria-label={label} className={page === id ? 'active' : ''} aria-current={page === id ? 'page' : undefined} onClick={() => onNavigate(id)}><Icon size={21}/><span>{label}</span></button>)}
-      <button ref={trigger} className={secondary.some(item => item.id === page) ? 'active' : ''} onClick={() => setOpen(true)} aria-haspopup="dialog" aria-expanded={open}><LayoutGrid size={21}/><span>{ru ? 'Ещё' : 'More'}</span></button>
+      <button ref={trigger} className={secondary.some(item => item.id === page) ? 'active' : ''} onClick={() => onOpenChange(true)} aria-haspopup="dialog" aria-expanded={open}><LayoutGrid size={21}/><span>{ru ? 'Ещё' : 'More'}</span></button>
     </nav>
-    <dialog ref={dialog} className={`navigation-sheet ${dark ? 'is-dark' : 'is-light'}`} onCancel={close} onClose={() => setOpen(false)} onClick={event => { if (event.target === event.currentTarget) close(); }} aria-labelledby="navigation-title">
+    <dialog ref={dialog} className={`navigation-sheet ${dark ? 'is-dark' : 'is-light'}`} onCancel={close} onClose={() => onOpenChange(false)} onClick={event => { if (event.target === event.currentTarget) close(); }} aria-labelledby="navigation-title">
       <div className="sheet-body"><header><div><span className="eyebrow">MARKETPULSE</span><h2 id="navigation-title">{ru ? 'Все инструменты' : 'All tools'}</h2></div><button className="icon-button" aria-label={ru ? 'Закрыть меню' : 'Close menu'} onClick={close}><X size={22}/></button></header>
         <nav>{secondary.map(({ id, label, icon: Icon }) => <button key={id} onClick={() => navigate(id)}><Icon size={22}/><span>{label}</span><ChevronRight size={17}/></button>)}<button onClick={() => { close(); onMarkets(true); }}><Star size={22}/><span>{ru ? 'Избранное' : 'Watchlist'}</span><ChevronRight size={17}/></button></nav>
         <div className="sheet-settings"><span className="eyebrow">{ru ? 'НАСТРОЙКИ' : 'SETTINGS'}</span>{preferences}</div>

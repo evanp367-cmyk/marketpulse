@@ -208,6 +208,8 @@ export default function App() {
   const [converterError, setConverterError] = useState('');
   const [converterBusy, setConverterBusy] = useState(false);
   const [converterPicker, setConverterPicker] = useState<ConverterPickerTarget>(null);
+  const converterPickerTrigger = useRef<HTMLButtonElement | null>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
   const [converterCurrencySearch, setConverterCurrencySearch] = useState('');
   const [portfolioData, setPortfolioData] = useState<PortfolioResponse | null>(null);
   const [portfolioBusy, setPortfolioBusy] = useState(false);
@@ -344,7 +346,8 @@ export default function App() {
     }
   }
 
-  function openConverterPicker(target: Exclude<ConverterPickerTarget, null>) {
+  function openConverterPicker(target: Exclude<ConverterPickerTarget, null>, trigger: HTMLButtonElement) {
+    converterPickerTrigger.current = trigger;
     setConverterCurrencySearch('');
     setConverterPicker(target);
   }
@@ -502,6 +505,13 @@ export default function App() {
     if (!converterPicker) return;
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key === 'Escape') setConverterPicker(null);
+      if (event.key === 'Tab') {
+        const controls = Array.from(document.querySelectorAll<HTMLElement>('.currency-picker-dialog button, .currency-picker-dialog input'))
+          .filter(control => !control.hasAttribute('disabled'));
+        if (!controls.length) return;
+        if (event.shiftKey && document.activeElement === controls[0]) { event.preventDefault(); controls[controls.length - 1].focus(); }
+        else if (!event.shiftKey && document.activeElement === controls[controls.length - 1]) { event.preventDefault(); controls[0].focus(); }
+      }
     };
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
@@ -509,6 +519,7 @@ export default function App() {
     return () => {
       document.body.style.overflow = previousOverflow;
       window.removeEventListener('keydown', closeOnEscape);
+      converterPickerTrigger.current?.focus();
     };
   }, [converterPicker]);
 
@@ -551,9 +562,11 @@ export default function App() {
   useEffect(() => {
     const backButton = window.Telegram?.WebApp?.BackButton;
     if (!backButton) return;
-    if (page === 'terminal') backButton.hide();
+    if (page === 'terminal' && !menuOpen && !converterPicker) backButton.hide();
     else backButton.show();
     const goBack = () => {
+      if (converterPicker) { setConverterPicker(null); return; }
+      if (menuOpen) { setMenuOpen(false); return; }
       if (window.history.state?.marketpulse && window.history.state.depth > 0) window.history.back();
       else navigate('terminal');
     };
@@ -561,7 +574,7 @@ export default function App() {
     return () => backButton.offClick(goBack);
     // Keep Telegram's back control synchronized with the current screen.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page]);
+  }, [page, menuOpen, converterPicker]);
 
   useEffect(() => {
     void loadCandles(selected);
@@ -676,7 +689,7 @@ export default function App() {
 
   return (
     <main className={dark ? 'app dark' : 'app light'}>
-      <Navigation page={page} lang={lang} dark={dark} unreadCount={unreadCount} onTheme={() => setDark(!dark)} onLanguage={() => setLang(lang === 'ru' ? 'en' : 'ru')}
+      <Navigation page={page} lang={lang} dark={dark} unreadCount={unreadCount} open={menuOpen} onOpenChange={setMenuOpen} onTheme={() => setDark(!dark)} onLanguage={() => setLang(lang === 'ru' ? 'en' : 'ru')}
         onNavigate={navigate}
         onMarkets={favorite => { navigate('markets'); setOnlyFavorites(favorite); }} />
 
@@ -734,7 +747,7 @@ export default function App() {
                 <label>{t.converterAmount}<input aria-label={t.converterAmount} type="number" min="0.00000001" max="1000000000000000" step="any" value={converterAmount} onChange={(event) => { setConverterAmount(event.target.value); setConverterResult(null); setConverterError(''); }} required /></label>
                 <div className="converter-picker-field converter-picker-from">
                   <span className="converter-field-label">{t.converterFrom}</span>
-                  <button className="currency-picker-trigger" type="button" onClick={() => openConverterPicker('from')} aria-haspopup="dialog" aria-label={`${t.converterFrom}: ${converterFrom} · ${converterFromInfo.name}`}>
+                  <button className="currency-picker-trigger" type="button" onClick={event => openConverterPicker('from', event.currentTarget)} aria-haspopup="dialog" aria-label={`${t.converterFrom}: ${converterFrom} · ${converterFromInfo.name}`}>
                     <span className="currency-picker-code">{converterFromInfo.code}</span>
                     <span className="currency-picker-identity"><strong>{converterFromInfo.name}</strong><small>{converterFromInfo.symbol || converterFromInfo.code} · {converterFromInfo.code}</small></span>
                     <ChevronDown size={19} aria-hidden="true" />
@@ -743,7 +756,7 @@ export default function App() {
                 <button className="converter-swap" type="button" title={t.converterSwap} aria-label={t.converterSwap} onClick={() => { setConverterFrom(converterTo); setConverterTo(converterFrom); setConverterResult(null); setConverterError(''); }}><ArrowLeftRight size={19} /></button>
                 <div className="converter-picker-field converter-picker-to">
                   <span className="converter-field-label">{t.converterTo}</span>
-                  <button className="currency-picker-trigger" type="button" onClick={() => openConverterPicker('to')} aria-haspopup="dialog" aria-label={`${t.converterTo}: ${converterTo} · ${converterToInfo.name}`}>
+                  <button className="currency-picker-trigger" type="button" onClick={event => openConverterPicker('to', event.currentTarget)} aria-haspopup="dialog" aria-label={`${t.converterTo}: ${converterTo} · ${converterToInfo.name}`}>
                     <span className="currency-picker-code">{converterToInfo.code}</span>
                     <span className="currency-picker-identity"><strong>{converterToInfo.name}</strong><small>{converterToInfo.symbol || converterToInfo.code} · {converterToInfo.code}</small></span>
                     <ChevronDown size={19} aria-hidden="true" />
