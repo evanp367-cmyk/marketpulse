@@ -9,7 +9,7 @@ class BinancePublicProvider:
     def __init__(self): self.base = settings.binance_rest_base.rstrip("/")
     async def _get(self, path: str, params: dict | None = None):
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(10.0, connect=5.0)) as client:
                 for attempt in range(2):
                     try:
                         response = await client.get(f"{self.base}{path}", params=params)
