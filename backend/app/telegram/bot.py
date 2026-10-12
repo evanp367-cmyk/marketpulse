@@ -12,6 +12,7 @@ from backend.app.db.session import SessionLocal
 from backend.app.models.models import User, Subscription, Payment
 from backend.app.telegram.payments import valid_pro_invoice, subscription_end
 from backend.app.alerts.engine import run_alerts
+from backend.app.signals.delivery import run_signal_delivery
 
 async def main():
     if not settings.telegram_bot_token:
@@ -153,6 +154,7 @@ async def main():
             await message.answer("Не удалось доставить обращение поддержке. Попробуйте позже или свяжитесь с владельцем MarketPulse другим способом.")
 
     alert_task = asyncio.create_task(run_alerts(bot)) if settings.alert_evaluator_enabled else None
+    signal_task = asyncio.create_task(run_signal_delivery(bot)) if settings.signal_delivery_enabled else None
     try:
         await dp.start_polling(bot)
     finally:
@@ -160,6 +162,12 @@ async def main():
             alert_task.cancel()
             try:
                 await alert_task
+            except asyncio.CancelledError:
+                pass
+        if signal_task is not None:
+            signal_task.cancel()
+            try:
+                await signal_task
             except asyncio.CancelledError:
                 pass
         await bot.session.close()

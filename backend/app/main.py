@@ -19,6 +19,7 @@ import uuid
 import httpx
 from backend.app.indicators.calculations import ema, rsi, macd, bollinger
 from backend.app.providers.news import latest_news
+from backend.app.signals.api import router as signal_intelligence_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -29,6 +30,7 @@ async def lifespan(app: FastAPI):
     yield
     await engine.dispose()
 app=FastAPI(title=settings.app_name,version="0.4.9",lifespan=lifespan)
+app.include_router(signal_intelligence_router)
 # Vite may be opened as either localhost or 127.0.0.1. Browsers treat these
 # as different origins, so allow both in local development even if an older
 # .env file only lists one of them.

@@ -13,6 +13,9 @@ class BinancePublicProvider:
         self._ticker_snapshot: list[dict] | None = None
         self._ticker_snapshot_at = 0.0
         self._ticker_lock = asyncio.Lock()
+    async def aclose(self):
+        """Requests use short-lived clients; keep worker shutdown symmetric."""
+        return None
     async def _get(self, path: str, params: dict | None = None):
         try:
             async with httpx.AsyncClient(timeout=httpx.Timeout(10.0, connect=5.0)) as client:
@@ -96,4 +99,4 @@ class BinancePublicProvider:
         limit=max(1,min(int(limit),1000))
         rows=await self._get("/api/v3/klines", {"symbol":symbol.upper(),"interval":interval,"limit":limit})
         now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
-        return [{"time": int(r[0] // 1000), "close_time": int(r[6]), "open": float(r[1]), "high": float(r[2]), "low": float(r[3]), "close": float(r[4]), "volume": float(r[5]), "closed": int(r[6]) < now_ms} for r in rows]
+        return [{"time": int(r[0] // 1000), "close_time": int(r[6]), "open": float(r[1]), "high": float(r[2]), "low": float(r[3]), "close": float(r[4]), "volume": float(r[5]), "quote_volume": float(r[7]) if len(r) > 7 else None, "closed": int(r[6]) < now_ms} for r in rows]
