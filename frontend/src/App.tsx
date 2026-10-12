@@ -162,6 +162,7 @@ export default function App() {
   const [dark, setDark] = useState(true);
   const [page, setPage] = useState<Page>('terminal');
   const [tickers, setTickers] = useState<Ticker[]>([]);
+  const [featuredTicker, setFeaturedTicker] = useState<Ticker | null>(null);
   const [candles, setCandles] = useState<Candle[]>([]);
   const [selected, setSelected] = useState('BTCUSDT');
   const [search, setSearch] = useState('');
@@ -173,6 +174,7 @@ export default function App() {
   const [chartBusy, setChartBusy] = useState(false);
   const busy = tickersBusy || chartBusy;
   const chartRequest = useRef<AbortController | null>(null);
+  const featuredRequest = useRef<AbortController | null>(null);
   const [fx, setFx] = useState<OfficialFxResponse | null>(null);
   const [fxError, setFxError] = useState('');
   const [fxBusy, setFxBusy] = useState(false);
@@ -285,8 +287,22 @@ export default function App() {
     }
   }
 
+  async function loadFeaturedTicker(symbol: string) {
+    featuredRequest.current?.abort();
+    const controller = new AbortController();
+    featuredRequest.current = controller;
+    try {
+      const response = await api<{ items: Ticker[] }>(`/api/market/tickers?symbols=${encodeURIComponent(symbol)}`, { signal: controller.signal });
+      if (!controller.signal.aborted) setFeaturedTicker(response.items[0] ?? null);
+    } catch {
+      if (!controller.signal.aborted) setFeaturedTicker(null);
+    } finally {
+      if (featuredRequest.current === controller) featuredRequest.current = null;
+    }
+  }
+
   async function load() {
-    await Promise.all([loadTickers(), loadCandles(selected)]);
+    await Promise.all([loadTickers(), loadCandles(selected), loadFeaturedTicker(selected)]);
   }
 
   async function loadCurrencyCatalog() {
@@ -506,9 +522,12 @@ export default function App() {
 
   useEffect(() => {
     void loadCandles(selected);
+    void loadFeaturedTicker(selected);
     return () => {
       chartRequest.current?.abort();
       chartRequest.current = null;
+      featuredRequest.current?.abort();
+      featuredRequest.current = null;
     };
     // Changing the instrument refreshes only its candles, not the full ticker list.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -532,7 +551,7 @@ export default function App() {
     .filter(item => item.symbol.includes(search.toUpperCase()))
     .sort((a, b) => Number(favorites.includes(b.symbol)) - Number(favorites.includes(a.symbol)))
     .slice(0, 80), [tickers, search, favorites]);
-  const current = tickers.find(item => item.symbol === selected);
+  const current = featuredTicker?.symbol === selected ? featuredTicker : tickers.find(item => item.symbol === selected);
   const portfolioSuggestions = useMemo(() => {
     const query = positionSearch.trim().toLocaleLowerCase();
     const quoteRank = (quote: string) => {
@@ -886,7 +905,7 @@ export default function App() {
             </header>
             {error && <div className="error-banner"><span>{error}</span><button onClick={() => setError('')}>×</button></div>}
             <div className="metrics">
-              <div className="metric"><span>TRACKED ASSETS</span><strong>{tickers.length.toLocaleString()}</strong><small>Binance Spot · API</small></div>
+              <div className="metric"><span>TRACKED ASSETS</span><strong>{tickersBusy && !tickers.length ? '…' : tickers.length.toLocaleString()}</strong><small>Binance Spot · API</small></div>
               <div className="metric"><span>SELECTED PAIR</span><strong>{selected.replace('USDT', '')}<em>/ USDT</em></strong><small>{current ? `${t.price} · ${Number(current.price).toLocaleString(undefined, { maximumFractionDigits: 6 })}` : t.loading}</small></div>
               <div className="metric"><span>DATA STATUS</span><strong className={error ? 'negative' : 'positive'}>{error ? 'DEGRADED' : 'CONNECTED'}</strong><small>{error || 'Latest API response received'}</small></div>
             </div>
