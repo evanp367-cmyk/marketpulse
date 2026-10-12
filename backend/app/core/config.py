@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     binance_rest_base: str = "https://data-api.binance.vision"
     binance_ws_base: str = "wss://data-stream.binance.vision/ws"
     market_stale_after_seconds: int = 30
+    alert_evaluator_enabled: bool = False
     mini_app_url: str = ""
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 

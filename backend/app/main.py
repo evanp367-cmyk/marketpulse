@@ -9,7 +9,7 @@ from decimal import Decimal
 from backend.app.core.config import settings, production_config_errors
 from backend.app.core.auth import current_user
 from backend.app.db.session import engine, get_session
-from backend.app.models.models import Base, User, WatchlistItem, PortfolioPosition, AlertRule, Subscription, Payment
+from backend.app.models.models import Base, User, WatchlistItem, PortfolioPosition, AlertRule, AlertEvent, Subscription, Payment
 from backend.app.providers.binance import BinancePublicProvider, MarketDataError
 from backend.app.providers.cbr import CBRDailyProvider, CBRDataError
 from backend.app.providers.frankfurter import FrankfurterProvider, FrankfurterDataError, FrankfurterCurrencyPairUnavailable
@@ -295,20 +295,83 @@ async def delete_position(position_id:int,user:User=Depends(current_user),sessio
     r=await session.execute(select(PortfolioPosition).where(PortfolioPosition.id==position_id,PortfolioPosition.user_id==user.id));row=r.scalar_one_or_none()
     if row is None:raise HTTPException(404,detail="Position not found")
     await session.delete(row);await session.commit();return {"deleted":True}
+class PriceCondition(BaseModel):
+    type: str = Field(pattern="^price$")
+    direction: str = Field(pattern="^(above|below)$")
+    threshold: Decimal = Field(gt=0, le=Decimal("1000000000000000"))
+
 class AlertInput(BaseModel):
     name: str = Field(min_length=1,max_length=120)
     symbol: str = Field(min_length=5,max_length=30,pattern="^[A-Za-z0-9]+$")
-    condition: dict
+    condition: PriceCondition
     cooldown_seconds: int = Field(default=900,ge=60,le=86400)
+
+class AlertUpdate(AlertInput):
+    enabled: bool
+
+def alert_response(row: AlertRule):
+    return {"id":row.id,"name":row.name,"symbol":row.symbol,"condition":row.condition,
+            "enabled":row.enabled,"cooldown_seconds":row.cooldown_seconds,
+            "last_triggered_at":row.last_triggered_at}
+
 @app.get("/api/alerts")
 async def alerts(user:User=Depends(current_user),session:AsyncSession=Depends(get_session)):
-    r=await session.execute(select(AlertRule).where(AlertRule.user_id==user.id).order_by(AlertRule.id.desc()));return {"items":[{"id":x.id,"name":x.name,"symbol":x.symbol,"condition":x.condition,"enabled":x.enabled,"cooldown_seconds":x.cooldown_seconds} for x in r.scalars().all()]}
+    r=await session.execute(select(AlertRule).where(AlertRule.user_id==user.id).order_by(AlertRule.id.desc()))
+    return {"items":[alert_response(x) for x in r.scalars().all()], "evaluation_enabled":settings.alert_evaluator_enabled}
 @app.post("/api/alerts")
 async def create_alert(payload:AlertInput,user:User=Depends(current_user),session:AsyncSession=Depends(get_session)):
     sub = await _get_subscription(session, user)
     count_result = await session.execute(select(AlertRule).where(AlertRule.user_id == user.id))
-    max_alerts = 20 if sub.plan_code == "pro" and sub.status == "active" else 2
+    sub_end = sub.ends_at.replace(tzinfo=timezone.utc) if sub.ends_at and sub.ends_at.tzinfo is None else sub.ends_at
+    pro_active = sub.plan_code == "pro" and sub.status == "active" and (sub_end is None or sub_end > datetime.now(timezone.utc))
+    max_alerts = 20 if pro_active else 2
     if len(count_result.scalars().all()) >= max_alerts:
         raise HTTPException(403, detail=f"Alert limit reached for {sub.plan_code} plan ({max_alerts}). Upgrade to Pro for more rules.")
-    # Stored rule only. Evaluator/delivery is not implemented yet and is documented as unavailable.
-    row=AlertRule(user_id=user.id,name=payload.name,symbol=payload.symbol.upper(),condition=payload.condition,cooldown_seconds=payload.cooldown_seconds);session.add(row);await session.commit();await session.refresh(row);return {"id":row.id,"enabled":row.enabled,"status":"saved_not_evaluated"}
+    row=AlertRule(user_id=user.id,name=payload.name.strip(),symbol=payload.symbol.upper(),condition=payload.condition.model_dump(mode="json"),cooldown_seconds=payload.cooldown_seconds)
+    session.add(row);await session.commit();await session.refresh(row)
+    return alert_response(row)
+
+@app.put("/api/alerts/{rule_id}")
+async def update_alert(rule_id:int,payload:AlertUpdate,user:User=Depends(current_user),session:AsyncSession=Depends(get_session)):
+    row=await session.scalar(select(AlertRule).where(AlertRule.id==rule_id,AlertRule.user_id==user.id))
+    if row is None:raise HTTPException(404,detail="Alert not found")
+    changed=(row.symbol!=payload.symbol.upper() or row.condition!=payload.condition.model_dump(mode="json") or (payload.enabled and not row.enabled))
+    row.name=payload.name.strip();row.symbol=payload.symbol.upper()
+    row.condition=payload.condition.model_dump(mode="json")
+    row.cooldown_seconds=payload.cooldown_seconds;row.enabled=payload.enabled
+    if changed:row.last_condition_met=False
+    if not row.enabled or changed:
+        pending=await session.execute(select(AlertEvent).where(AlertEvent.rule_id==row.id,AlertEvent.status=="pending"))
+        for event in pending.scalars():event.status="cancelled"
+    await session.commit();await session.refresh(row)
+    return alert_response(row)
+
+class AlertToggle(BaseModel):
+    enabled: bool
+
+@app.patch("/api/alerts/{rule_id}")
+async def toggle_alert(rule_id:int,payload:AlertToggle,user:User=Depends(current_user),session:AsyncSession=Depends(get_session)):
+    row=await session.scalar(select(AlertRule).where(AlertRule.id==rule_id,AlertRule.user_id==user.id))
+    if row is None:raise HTTPException(404,detail="Alert not found")
+    if payload.enabled and not row.enabled:row.last_condition_met=False
+    row.enabled=payload.enabled
+    if not row.enabled:
+        pending=await session.execute(select(AlertEvent).where(AlertEvent.rule_id==row.id,AlertEvent.status=="pending"))
+        for event in pending.scalars():event.status="cancelled"
+    await session.commit();await session.refresh(row)
+    return alert_response(row)
+
+@app.delete("/api/alerts/{rule_id}")
+async def delete_alert(rule_id:int,user:User=Depends(current_user),session:AsyncSession=Depends(get_session)):
+    row=await session.scalar(select(AlertRule).where(AlertRule.id==rule_id,AlertRule.user_id==user.id))
+    if row is None:raise HTTPException(404,detail="Alert not found")
+    pending=await session.execute(select(AlertEvent).where(AlertEvent.rule_id==row.id,AlertEvent.status=="pending"))
+    for event in pending.scalars():event.status="cancelled"
+    await session.delete(row);await session.commit();return {"deleted":True}
+
+@app.get("/api/alerts/history")
+async def alert_history(user:User=Depends(current_user),session:AsyncSession=Depends(get_session)):
+    rows=(await session.execute(select(AlertEvent).where(AlertEvent.user_id==user.id).order_by(AlertEvent.id.desc()).limit(50))).scalars().all()
+    return {"items":[{"id":event.id,"symbol":event.symbol,"price":str(event.price),"status":event.status,
+                      "attempts":event.attempts,"created_at":event.created_at,"delivered_at":event.delivered_at}
+                     for event in rows]}
