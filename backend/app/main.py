@@ -203,7 +203,9 @@ async def create_pro_invoice(user: User = Depends(current_user), session: AsyncS
     payload = f"marketpulse_pro_month_{user.telegram_id}_{uuid.uuid4().hex}"
     # A single payment grants 30 days. Recurring billing requires separate consent.
     body = {"title":"MarketPulse Pro · 30 days", "description":"Pro tools for market research. No guaranteed returns.", "payload":payload, "provider_token":"", "currency":"XTR", "prices":[{"label":"MarketPulse Pro · 30 days", "amount":settings.telegram_pro_price_stars}]}
-    async with httpx.AsyncClient(timeout=10) as client:
+    proxy_url = settings.telegram_proxy_url.strip()
+    proxy_args = {"proxy": proxy_url} if proxy_url else {}
+    async with httpx.AsyncClient(timeout=10, **proxy_args) as client:
         try:
             response = await client.post(f"https://api.telegram.org/bot{settings.telegram_bot_token}/createInvoiceLink", json=body)
             response.raise_for_status(); data = response.json()

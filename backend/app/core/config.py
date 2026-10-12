@@ -1,5 +1,6 @@
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from urllib.parse import urlsplit
 
 class Settings(BaseSettings):
     app_name: str = "MarketPulse"
@@ -7,6 +8,7 @@ class Settings(BaseSettings):
     database_url: str = "sqlite+aiosqlite:///./marketpulse.db"
     telegram_bot_token: str = ""
     telegram_bot_username: str = ""
+    telegram_proxy_url: str = ""
     telegram_pro_price_stars: int = Field(default=250, ge=1, le=1000000)
     support_admin_ids: str = ""
     telegram_initdata_max_age_seconds: int = 86400
@@ -36,6 +38,14 @@ def production_config_errors(config: Settings) -> list[str]:
         errors.append("TELEGRAM_BOT_TOKEN is required in production")
     if not config.telegram_bot_username.strip():
         errors.append("TELEGRAM_BOT_USERNAME is required in production")
+    if config.telegram_proxy_url.strip():
+        try:
+            proxy = urlsplit(config.telegram_proxy_url.strip())
+            valid_proxy = proxy.scheme in {"http", "socks5"} and bool(proxy.hostname and proxy.port)
+        except ValueError:
+            valid_proxy = False
+        if not valid_proxy:
+            errors.append("TELEGRAM_PROXY_URL must be an HTTP or SOCKS5 proxy URL with host and port")
     if not config.mini_app_url.strip().startswith("https://"):
         errors.append("MINI_APP_URL must be the public HTTPS frontend URL")
     origins = [origin.strip().rstrip("/") for origin in config.cors_origins.split(",") if origin.strip()]
